@@ -6,77 +6,199 @@ from webdriver_manager.chrome import ChromeDriverManager
 from selenium.webdriver.common.by import By
 from selenium.webdriver.support.ui import WebDriverWait
 from selenium.webdriver.support import expected_conditions as EC
+from selenium.webdriver.common.keys import Keys
+from selenium.common.exceptions import UnexpectedAlertPresentException, NoAlertPresentException
 
-# 1. BIKIN FOLDER PENYIMPANAN
-folder_output = "output_gambar_mrtg"
-if not os.path.exists(folder_output):
-    os.makedirs(folder_output)
-    print(f"Folder '{folder_output}' berhasil dibuat.")
+# ========== KONFIGURASI ==========
+FOLDER_OUTPUT = "output_mrtg_all_sid"
+BULAN = "01"
+TAHUN = "2026"
+TANGGAL_MULAI = 1
+TANGGAL_AKHIR = 31
+MAX_RETRIES = 2
+SID_FILE = "SID-MRTG.txt"
+MIN_FILE_SIZE = 30000  # 30KB, gambar error biasanya di bawah ini
 
-# 2. BUKA BROWSER CHROME
-print("Membuka browser...")
-options = webdriver.ChromeOptions()
-options.add_argument("--start-maximized")
-driver = webdriver.Chrome(service=Service(ChromeDriverManager().install()), options=options)
+# ========== BACA SID ==========
+def baca_sid_dari_file(filepath):
+    sid_list = []
+    with open(filepath, "r", encoding="utf-8") as f:
+        for line in f:
+            line = line.strip()
+            if line.startswith("SID : "):
+                sid = line.replace("SID : ", "").strip()
+                if sid:
+                    sid_list.append(sid)
+    # hilangkan duplikat
+    seen = set()
+    unik = []
+    for s in sid_list:
+        if s not in seen:
+            seen.add(s)
+            unik.append(s)
+    return unik
 
-driver.get("http://telkomcare.telkom.co.id/mrtgnetcare2/graph/monitoring")
+# ========== FUNGSI TUTUP ALERT ==========
+def tutup_alert_jika_ada(driver):
+    try:
+        alert = driver.switch_to.alert
+        print(f"     → Alert: {alert.text[:50]}")
+        alert.accept()
+        time.sleep(1)
+        return True
+    except NoAlertPresentException:
+        return False
 
-# 3. INTERVENSI LOGIN & PILIH SID MANUAL
-print("\n" + "="*60)
-print("ACTION REQUIRED: LAKUKAN INI DI BROWSER:")
-print("1. Login dan selesaikan Captcha.")
-print("2. Masukkan SID secara manual dan biarkan grafik awalnya muncul.")
-print("="*60)
-input("JIKA GRAFIK MUNCUL DI LAYAR, TEKAN ENTER DI SINI... ")
-print("\nMulai mengambil data otomatis 1 bulan...\n")
+# ========== RESET HALAMAN ==========
+def reset_halaman(driver):
+    print("     → Refresh halaman...")
+    driver.refresh()
+    time.sleep(5)
+    tutup_alert_jika_ada(driver)
+    try:
+        WebDriverWait(driver, 15).until(EC.presence_of_element_located((By.NAME, "sid")))
+        return True
+    except:
+        return False
 
-# 4. SETTING TARGET
-sid_target = "4700001-0021497479" # Ganti sesuai SID yang lagi dikerjain
-bulan = "01"
-tahun = "2026"
+# ========== GANTI SID ==========
+def ganti_sid(driver, sid):
+    try:
+        input_sid = WebDriverWait(driver, 10).until(EC.presence_of_element_located((By.NAME, "sid")))
+        input_sid.clear()
+        input_sid.send_keys(sid)
+        time.sleep(0.5)
+        input_sid.send_keys(Keys.ENTER)
+        print(f"   → Tekan Enter untuk SID {sid}")
+        
+        time.sleep(2)
+        if tutup_alert_jika_ada(driver):
+            print(f"   → Alert muncul, SID {sid} tidak valid")
+            return False
+        
+        tombol_grafik = WebDriverWait(driver, 10).until(EC.element_to_be_clickable((By.CSS_SELECTOR, "a.btn-graph")))
+        driver.execute_script("arguments[0].scrollIntoView({block: 'center'});", tombol_grafik)
+        time.sleep(0.5)
+        driver.execute_script("arguments[0].click();", tombol_grafik)
+        print(f"   → Klik tombol grafik untuk SID {sid}")
+        time.sleep(3)
+        return True
+    except UnexpectedAlertPresentException:
+        tutup_alert_jika_ada(driver)
+        return False
+    except Exception as e:
+        print(f"   → ERROR: {str(e)[:80]}")
+        return False
 
-# 5. LOOPING TANGGAL 1 SAMPAI 31
-for hari in range(1, 32):
+# ========== AMBIL GAMBAR SATU TANGGAL DENGAN DETEKSI UKURAN ==========
+def ambil_gambar_tanggal(driver, sid, folder_target, tahun, bulan, hari):
     tgl_str = f"{hari:02d}/{bulan}/{tahun}"
     waktu_awal = f"{tgl_str} 00:00"
     waktu_akhir = f"{tgl_str} 23:55"
+    nama_file = f"{folder_target}/MRTG_{sid}_{tahun}{bulan}{hari:02d}.png"
     
-    try:
-        # A. Bypass Kolom Tanggal
-        inputs_tanggal = driver.find_elements(By.XPATH, "//button[contains(normalize-space(), 'Filter')]/preceding::input[not(@type='hidden')]")
-        
-        if len(inputs_tanggal) >= 2:
-            input_start = inputs_tanggal[-2]
-            input_end = inputs_tanggal[-1]
-            driver.execute_script("arguments[0].value = arguments[1];", input_start, waktu_awal)
-            driver.execute_script("arguments[0].value = arguments[1];", input_end, waktu_akhir)
+    for percobaan in range(1, MAX_RETRIES + 1):
+        try:
+            # Isi tanggal
+            inputs_tanggal = driver.find_elements(By.XPATH, "//button[contains(normalize-space(), 'Filter')]/preceding::input[not(@type='hidden')]")
+            if len(inputs_tanggal) >= 2:
+                input_start = inputs_tanggal[-2]
+                input_end = inputs_tanggal[-1]
+                driver.execute_script("arguments[0].value = arguments[1];", input_start, waktu_awal)
+                driver.execute_script("arguments[0].value = arguments[1];", input_end, waktu_akhir)
+            else:
+                print(f"     [SKIP] Kolom tanggal tidak ditemukan")
+                return False
+            
+            # Klik Filter
+            tombol_filter = driver.find_element(By.XPATH, "//button[contains(normalize-space(), 'Filter')]")
+            driver.execute_script("arguments[0].click();", tombol_filter)
+            
+            # Tunggu gambar grafik
+            grafik_img = WebDriverWait(driver, 20).until(
+                EC.presence_of_element_located((By.XPATH, "//img[contains(@src, 'graph.php')]"))
+            )
+            driver.execute_script("arguments[0].scrollIntoView({block: 'center'});", grafik_img)
+            time.sleep(2)
+            
+            # Screenshot
+            grafik_img.screenshot(nama_file)
+            
+            # CEK UKURAN FILE
+            file_size = os.path.getsize(nama_file)
+            if file_size < MIN_FILE_SIZE:
+                print(f"     [GAGAL] {tgl_str} - file terlalu kecil ({file_size} bytes), Graph not available")
+                os.remove(nama_file)
+                raise Exception("File terlalu kecil (Graph not available)")
+            
+            print(f"     [OK] {tgl_str} ({file_size} bytes)")
+            return True
+            
+        except Exception as e:
+            print(f"     [PERCOBAAN {percobaan}/{MAX_RETRIES}] {tgl_str} gagal: {str(e)[:60]}")
+            if percobaan < MAX_RETRIES:
+                reset_halaman(driver)
+                if not ganti_sid(driver, sid):
+                    return False
+                time.sleep(2)
+            else:
+                return False
+    return False
+
+# ========== AMBIL SEMUA TANGGAL UNTUK SATU SID ==========
+def ambil_gambar_per_sid(driver, sid, folder_target):
+    os.makedirs(folder_target, exist_ok=True)
+    success = 0
+    for hari in range(TANGGAL_MULAI, TANGGAL_AKHIR + 1):
+        if ambil_gambar_tanggal(driver, sid, folder_target, TAHUN, BULAN, hari):
+            success += 1
         else:
-            print(f" -> [WARNING] Kolom kalender tidak ditemukan untuk tanggal {tgl_str}")
+            print(f"     [WARNING] Gagal permanen untuk tanggal {hari:02d}")
+        time.sleep(1)
+    return success
+
+# ========== MAIN ==========
+def main():
+    print("=" * 60)
+    print("AUTOMATED MRTG - DETEKSI GRAPH NOT AVAILABLE")
+    print("=" * 60)
+    
+    sid_list = baca_sid_dari_file(SID_FILE)
+    print(f"\nDitemukan {len(sid_list)} SID unik")
+    
+    options = webdriver.ChromeOptions()
+    options.add_argument("--start-maximized")
+    driver = webdriver.Chrome(service=Service(ChromeDriverManager().install()), options=options)
+    driver.get("http://telkomcare.telkom.co.id/mrtgnetcare2/graph/monitoring")
+    
+    print("\n" + "=" * 60)
+    print("⚠️ LOGIN MANUAL, ISI CAPTCHA, LALU ENTER")
+    print("=" * 60)
+    input("TEKAN ENTER...")
+    
+    os.makedirs(FOLDER_OUTPUT, exist_ok=True)
+    total_ok = 0
+    for idx, sid in enumerate(sid_list, 1):
+        print(f"\n{'='*50}")
+        print(f"📁 PROSES SID {idx}/{len(sid_list)}: {sid}")
+        print(f"{'='*50}")
+        
+        if not ganti_sid(driver, sid):
+            print(f"❌ Skip SID {sid}")
+            reset_halaman(driver)
             continue
+        
+        folder_sid = os.path.join(FOLDER_OUTPUT, sid.replace("-", "_"))
+        ok = ambil_gambar_per_sid(driver, sid, folder_sid)
+        total_ok += ok
+        print(f"✅ SID {sid}: {ok}/31 gambar valid")
+        time.sleep(3)
+    
+    print("\n" + "=" * 60)
+    print(f"🎉 SELESAI! Total gambar valid: {total_ok}")
+    print(f"📁 Folder: {FOLDER_OUTPUT}")
+    print("=" * 60)
+    driver.quit()
 
-        # B. Klik tombol Filter
-        tombol_filter = driver.find_element(By.XPATH, "//button[contains(normalize-space(), 'Filter')]")
-        driver.execute_script("arguments[0].click();", tombol_filter)
-        
-        print(f"[{hari}/31] Meminta data tanggal {tgl_str} ke server...")
-
-        # C. Tunggu gambar grafik spesifik muncul (Maksimal nunggu 15 detik)
-        grafik_img = WebDriverWait(driver, 15).until(
-            EC.presence_of_element_located((By.XPATH, "//img[contains(@src, 'graph.php') and contains(@src, 'local_graph_id')]"))
-        )
-        
-        # ---> INI OBATNYA: SCROLL GAMBAR KE TENGAH LAYAR BIAR FULL <---
-        driver.execute_script("arguments[0].scrollIntoView({block: 'center'});", grafik_img)
-        
-        # D. Jeda sejenak biar browser selesai nge-scroll dan gambar kerender 100%
-        time.sleep(2)
-        
-        # E. "Save Image As"
-        nama_file = f"{folder_output}/MRTG_{sid_target}_{tahun}{bulan}{hari:02d}.png"
-        grafik_img.screenshot(nama_file)
-        print(f" -> Sukses save grafik: {nama_file}")
-        
-    except Exception as e:
-        print(f" -> [ERROR] Gagal memproses tanggal {tgl_str}. Timeout atau grafik kosong.")
-
-print("\nSEMUA PROSES SELESAI! Cek folder:", folder_output)
+if __name__ == "__main__":
+    main()
