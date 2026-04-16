@@ -1,10 +1,3 @@
-
-
----
-
-## 📄 **README.md** (Simpan di root repository)
-
-```markdown
 # 📊 MRTG Automation Tool for TelkomCare
 
 **Otomatis screenshot grafik MRTG dari TelkomCare untuk banyak SID atau Graph Title, dengan validasi OCR dan retry otomatis.**
