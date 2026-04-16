@@ -1,6 +1,6 @@
 import time
 import os
-import io
+from datetime import datetime, timedelta
 from selenium import webdriver
 from selenium.webdriver.chrome.service import Service
 from webdriver_manager.chrome import ChromeDriverManager
@@ -13,17 +13,12 @@ import pytesseract
 from PIL import Image
 
 # ========== KONFIGURASI TESSERACT ==========
-# Sesuaikan path jika perlu (default install di C:\Program Files\Tesseract-OCR\tesseract.exe)
 pytesseract.pytesseract.tesseract_cmd = r'C:\Program Files\Tesseract-OCR\tesseract.exe'
 
-# ========== KONFIGURASI SCRIPT ==========
-FOLDER_OUTPUT = "output_mrtg_all_sid"
-BULAN = "01"
-TAHUN = "2026"
-TANGGAL_MULAI = 1
-TANGGAL_AKHIR = 31
-MAX_RETRIES = 2  # Maksimal percobaan ulang per tanggal
+# ========== KONFIGURASI UMUM ==========
+FOLDER_OUTPUT = "output_mrtg_sid"
 SID_FILE = "SID-MRTG.txt"
+MAX_RETRIES = 2  # Maks percobaan per (SID, tanggal)
 
 # ========== BACA SID DARI FILE ==========
 def baca_sid_dari_file(filepath):
@@ -35,7 +30,7 @@ def baca_sid_dari_file(filepath):
                 sid = line.replace("SID : ", "").strip()
                 if sid:
                     sid_list.append(sid)
-    # Hilangkan duplikat
+    # hilangkan duplikat
     seen = set()
     unik = []
     for s in sid_list:
@@ -48,7 +43,7 @@ def baca_sid_dari_file(filepath):
 def tutup_alert_jika_ada(driver):
     try:
         alert = driver.switch_to.alert
-        print(f"     → Alert terdeteksi: {alert.text[:80]}")
+        print(f"     → Alert: {alert.text[:50]}")
         alert.accept()
         time.sleep(1)
         return True
@@ -57,24 +52,20 @@ def tutup_alert_jika_ada(driver):
 
 # ========== RESET HALAMAN (F5) ==========
 def reset_halaman(driver):
-    print("     → Melakukan refresh halaman (F5)...")
+    print("     → Refresh halaman...")
     driver.refresh()
     time.sleep(5)
     tutup_alert_jika_ada(driver)
     try:
-        WebDriverWait(driver, 15).until(
-            EC.presence_of_element_located((By.NAME, "sid"))
-        )
+        WebDriverWait(driver, 15).until(EC.presence_of_element_located((By.NAME, "sid")))
         return True
     except:
         return False
 
-# ========== GANTI SID (INPUT + ENTER + KLIK TOMBOL GRAFIK) ==========
+# ========== GANTI SID (sekali untuk satu SID) ==========
 def ganti_sid(driver, sid):
     try:
-        input_sid = WebDriverWait(driver, 10).until(
-            EC.presence_of_element_located((By.NAME, "sid"))
-        )
+        input_sid = WebDriverWait(driver, 10).until(EC.presence_of_element_located((By.NAME, "sid")))
         input_sid.clear()
         input_sid.send_keys(sid)
         time.sleep(0.5)
@@ -83,19 +74,16 @@ def ganti_sid(driver, sid):
 
         time.sleep(2)
         if tutup_alert_jika_ada(driver):
-            print(f"   → Alert muncul, SID {sid} mungkin tidak valid")
+            print(f"   → Alert muncul, SID {sid} tidak valid")
             return False
 
-        tombol_grafik = WebDriverWait(driver, 10).until(
-            EC.element_to_be_clickable((By.CSS_SELECTOR, "a.btn-graph"))
-        )
+        tombol_grafik = WebDriverWait(driver, 10).until(EC.element_to_be_clickable((By.CSS_SELECTOR, "a.btn-graph")))
         driver.execute_script("arguments[0].scrollIntoView({block: 'center'});", tombol_grafik)
         time.sleep(0.5)
         driver.execute_script("arguments[0].click();", tombol_grafik)
         print(f"   → Klik tombol grafik untuk SID {sid}")
         time.sleep(3)
         return True
-
     except UnexpectedAlertPresentException:
         tutup_alert_jika_ada(driver)
         return False
@@ -105,37 +93,36 @@ def ganti_sid(driver, sid):
 
 # ========== VALIDASI GAMBAR DENGAN OCR ==========
 def is_graph_not_available(image_path):
-    """
-    Membaca teks dari gambar menggunakan OCR.
-    Return True jika ditemukan kata "Graph not available", else False.
-    """
     try:
         img = Image.open(image_path)
-        # Resize sedikit agar OCR lebih akurat (opsional)
         img = img.resize((img.width * 2, img.height * 2), Image.Resampling.LANCZOS)
         text = pytesseract.image_to_string(img)
-        # Cek berbagai kemungkinan variasi
         if "Graph not available" in text or "not available" in text.lower():
             return True
-        # Cek juga jika gambar terlalu kecil atau kosong
         if img.width < 50 or img.height < 50:
             return True
         return False
     except Exception as e:
         print(f"     → OCR error: {e}")
-        # Jika OCR gagal, fallback ke ukuran file (opsional)
         return False
 
-# ========== AMBIL GAMBAR UNTUK SATU TANGGAL DENGAN RETRY & OCR ==========
-def ambil_gambar_tanggal(driver, sid, folder_target, tahun, bulan, hari):
-    tgl_str = f"{hari:02d}/{bulan}/{tahun}"
+# ========== AMBIL GAMBAR UNTUK SATU SID PADA SATU TANGGAL (tanpa ganti SID ulang) ==========
+def ambil_gambar_tanggal(driver, sid, tanggal):
+    """
+    tanggal: datetime object
+    return: path file sementara jika sukses (gambar valid), None jika gagal
+    """
+    tgl_str = tanggal.strftime("%d/%m/%Y")
+    tahun = tanggal.strftime("%Y")
+    bulan = tanggal.strftime("%m")
+    hari = tanggal.strftime("%d")
     waktu_awal = f"{tgl_str} 00:00"
     waktu_akhir = f"{tgl_str} 23:55"
-    nama_file = f"{folder_target}/MRTG_{sid}_{tahun}{bulan}{hari:02d}.png"
+    temp_file = f"temp_{sid}_{tahun}{bulan}{hari}.png"
 
     for percobaan in range(1, MAX_RETRIES + 1):
         try:
-            # 1. Isi input tanggal
+            # Isi input tanggal (masih pakai elemen yang sama)
             inputs_tanggal = driver.find_elements(By.XPATH, "//button[contains(normalize-space(), 'Filter')]/preceding::input[not(@type='hidden')]")
             if len(inputs_tanggal) >= 2:
                 input_start = inputs_tanggal[-2]
@@ -144,116 +131,152 @@ def ambil_gambar_tanggal(driver, sid, folder_target, tahun, bulan, hari):
                 driver.execute_script("arguments[0].value = arguments[1];", input_end, waktu_akhir)
             else:
                 print(f"     [SKIP] Kolom tanggal tidak ditemukan")
-                return False
+                return None
 
-            # 2. Klik tombol Filter
+            # Klik Filter
             tombol_filter = driver.find_element(By.XPATH, "//button[contains(normalize-space(), 'Filter')]")
             driver.execute_script("arguments[0].click();", tombol_filter)
 
-            # 3. Tunggu gambar grafik muncul
+            # Tunggu gambar grafik
             grafik_img = WebDriverWait(driver, 20).until(
                 EC.presence_of_element_located((By.XPATH, "//img[contains(@src, 'graph.php')]"))
             )
             driver.execute_script("arguments[0].scrollIntoView({block: 'center'});", grafik_img)
             time.sleep(2)
 
-            # 4. Screenshot
-            grafik_img.screenshot(nama_file)
+            # Screenshot
+            grafik_img.screenshot(temp_file)
 
-            # 5. VALIDASI DENGAN OCR
-            if is_graph_not_available(nama_file):
-                print(f"     [GAGAL] {tgl_str} - Terdeteksi 'Graph not available' (OCR)")
-                os.remove(nama_file)
+            # Validasi OCR
+            if is_graph_not_available(temp_file):
+                print(f"     [GAGAL] {tgl_str} - Graph not available")
+                os.remove(temp_file)
                 raise Exception("Graph not available")
 
-            # 6. Jika valid, sukses
             print(f"     [OK] {tgl_str}")
-            return True
+            return temp_file
 
         except Exception as e:
-            print(f"     [PERCOBAAN {percobaan}/{MAX_RETRIES}] {tgl_str} gagal: {str(e)[:60]}")
+            print(f"     [PERCOBAAN {percobaan}] {sid} - {tgl_str} gagal: {str(e)[:60]}")
             if percobaan < MAX_RETRIES:
-                # Reset halaman dan ganti SID lagi
+                # Jika gagal, coba refresh halaman dan ganti SID lagi? 
+                # Tapi ini akan mengganggu loop tanggal. Alternatif: reset halaman dan ganti SID ulang.
+                # Namun karena kita masih dalam satu SID, lebih baik refresh dan ganti SID lagi.
                 reset_halaman(driver)
                 if not ganti_sid(driver, sid):
-                    return False
+                    return None
                 time.sleep(2)
             else:
-                # Hapus file jika masih error (biar gak numpuk)
-                if os.path.exists(nama_file):
-                    os.remove(nama_file)
-                return False
-    return False
+                if os.path.exists(temp_file):
+                    os.remove(temp_file)
+                return None
+    return None
 
-# ========== AMBIL SEMUA TANGGAL UNTUK SATU SID ==========
-def ambil_gambar_per_sid(driver, sid, folder_target):
-    os.makedirs(folder_target, exist_ok=True)
-    success_count = 0
-    for hari in range(TANGGAL_MULAI, TANGGAL_AKHIR + 1):
-        if ambil_gambar_tanggal(driver, sid, folder_target, TAHUN, BULAN, hari):
-            success_count += 1
+# ========== PROSES SATU SID UNTUK SEMUA TANGGAL ==========
+def proses_sid_untuk_range(driver, sid, start_date, end_date):
+    """
+    Loop tanggal dari start_date sampai end_date.
+    Untuk setiap tanggal, ambil gambar dan simpan ke folder YYYYMMDD.
+    return: jumlah sukses
+    """
+    sukses = 0
+    current_date = start_date
+    while current_date <= end_date:
+        tgl_str = current_date.strftime("%Y%m%d")
+        folder_tanggal = os.path.join(FOLDER_OUTPUT, tgl_str)
+        os.makedirs(folder_tanggal, exist_ok=True)
+
+        print(f"   → Mengambil gambar untuk {current_date.strftime('%d/%m/%Y')}")
+        temp_file = ambil_gambar_tanggal(driver, sid, current_date)
+        if temp_file and os.path.exists(temp_file):
+            final_name = os.path.join(folder_tanggal, f"MRTG_{sid}.png")
+            os.rename(temp_file, final_name)
+            print(f"     ✅ Tersimpan: {final_name}")
+            sukses += 1
         else:
-            print(f"     [WARNING] Gagal permanen untuk tanggal {hari:02d}")
-        time.sleep(1)  # Jeda ringan
-    return success_count
+            print(f"     ❌ Gagal untuk tanggal {current_date.strftime('%d/%m/%Y')}")
 
-# ========== MAIN PROGRAM ==========
+        current_date += timedelta(days=1)
+        time.sleep(1)  # jeda antar tanggal
+    return sukses
+
+# ========== INPUT RENTANG TANGGAL DARI USER ==========
+def input_tanggal_range():
+    print("\nMasukkan rentang tanggal (contoh: 1 1 2026 untuk 01/01/2026)")
+    print("=" * 50)
+    tgl_mulai = input("Tanggal mulai (DD MM YYYY): ").strip().split()
+    tgl_akhir = input("Tanggal akhir (DD MM YYYY): ").strip().split()
+    
+    if len(tgl_mulai) != 3 or len(tgl_akhir) != 3:
+        print("Format salah! Gunakan: DD MM YYYY (pisah spasi)")
+        return None, None
+    
+    try:
+        start = datetime(int(tgl_mulai[2]), int(tgl_mulai[1]), int(tgl_mulai[0]))
+        end = datetime(int(tgl_akhir[2]), int(tgl_akhir[1]), int(tgl_akhir[0]))
+        if start > end:
+            print("Tanggal mulai harus lebih awal dari tanggal akhir")
+            return None, None
+        return start, end
+    except ValueError:
+        print("Tanggal tidak valid")
+        return None, None
+
+# ========== MAIN ==========
 def main():
     print("=" * 60)
-    print("AUTOMATED MRTG - VALIDASI OCR (TESSERACT)")
+    print("AUTOMATED MRTG - OPTIMIZED (per SID loop tanggal)")
     print("=" * 60)
-
-    # Baca daftar SID
+    
+    # Baca SID
     sid_list = baca_sid_dari_file(SID_FILE)
-    print(f"\nDitemukan {len(sid_list)} SID unik:")
-    for i, sid in enumerate(sid_list, 1):
-        print(f"  {i}. {sid}")
-
-    # Setup ChromeDriver
+    if not sid_list:
+        print("Tidak ada SID ditemukan di file", SID_FILE)
+        return
+    print(f"\nDitemukan {len(sid_list)} SID unik")
+    
+    # Input rentang tanggal
+    start_date, end_date = input_tanggal_range()
+    if not start_date or not end_date:
+        return
+    
+    # Setup browser
     print("\nMembuka browser...")
     options = webdriver.ChromeOptions()
     options.add_argument("--start-maximized")
     driver = webdriver.Chrome(service=Service(ChromeDriverManager().install()), options=options)
     driver.get("http://telkomcare.telkom.co.id/mrtgnetcare2/graph/monitoring")
-
-    # Login manual
+    
     print("\n" + "=" * 60)
-    print("⚠️  ACTION REQUIRED:")
-    print("   1. Login dan selesaikan CAPTCHA")
-    print("   2. Biarkan halaman terbuka (jangan ditutup)")
-    print("   3. Pastikan grafik default muncul")
+    print("⚠️ LOGIN MANUAL, ISI CAPTCHA, LALU ENTER")
     print("=" * 60)
-    input("\n✅ TEKAN ENTER SETELAH LOGIN BERHASIL... ")
-
-    # Buat folder utama
-    os.makedirs(FOLDER_OUTPUT, exist_ok=True)
-
+    input("TEKAN ENTER SETELAH LOGIN...")
+    
     total_sukses = 0
     for idx, sid in enumerate(sid_list, start=1):
         print(f"\n{'='*50}")
         print(f"📁 PROSES SID {idx}/{len(sid_list)}: {sid}")
         print(f"{'='*50}")
-
+        
+        # Ganti SID sekali untuk SID ini
         if not ganti_sid(driver, sid):
             print(f"❌ Skip SID {sid} (gagal ganti SID)")
             reset_halaman(driver)
             continue
-
-        folder_sid = os.path.join(FOLDER_OUTPUT, sid.replace("-", "_"))
-        jumlah_berhasil = ambil_gambar_per_sid(driver, sid, folder_sid)
-        total_sukses += jumlah_berhasil
-        print(f"✅ SID {sid}: {jumlah_berhasil}/31 gambar valid")
-
-        # Jeda antar SID biar server nggak kaget
-        print("   → Jeda 3 detik sebelum ke SID berikutnya...")
+        
+        # Proses semua tanggal untuk SID ini
+        sukses = proses_sid_untuk_range(driver, sid, start_date, end_date)
+        total_sukses += sukses
+        print(f"✅ SID {sid}: {sukses}/{ (end_date - start_date).days + 1 } gambar berhasil")
+        
+        # Jeda antar SID
+        print("   → Jeda 3 detik sebelum SID berikutnya...")
         time.sleep(3)
-
-    # Selesai
+    
     print("\n" + "=" * 60)
-    print(f"🎉 SELESAI! Total gambar valid: {total_sukses}")
+    print(f"🎉 SELESAI! Total gambar berhasil: {total_sukses}")
     print(f"📁 Folder output: {FOLDER_OUTPUT}")
     print("=" * 60)
-
     driver.quit()
 
 if __name__ == "__main__":
