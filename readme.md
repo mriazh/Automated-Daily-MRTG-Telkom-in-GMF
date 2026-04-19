@@ -30,10 +30,9 @@
 | **Tesseract OCR** | [Download](https://github.com/UB-Mannheim/tesseract/wiki) – pilih `tesseract-ocr-w64-setup-5.5.0.20241111.exe`, **centang "Add to PATH"** |
 | **Internet** | Akses ke `telkomcare.telkom.co.id` |
 
-### Environment Variables (PATH) – Contoh dari pengguna
+### Environment Variables (PATH)
 ```
 C:\Users\adima\AppData\Local\Python\bin
-C:\Users\adima\AppData\Local\Python\pythoncore-3.14-64
 C:\Users\adima\AppData\Local\Python\pythoncore-3.14-64\Scripts
 C:\Program Files\Tesseract-OCR
 ```
@@ -99,12 +98,13 @@ python mrtg_telkomcare_sid.py
 ```
 
 **Alur:**
-- Browser terbuka → Login manual + CAPTCHA + MFA → tekan Enter di terminal.
+- Browser terbuka → Login manual + CAPTCHA + MFA → Masuk ke Halaman yang dituju
 - Masukkan rentang tanggal (contoh: `1 1 2026` dan `31 1 2026`).
+- Tekan Enter di terminal.
 - Script akan:
   - Membaca semua SID dari file.
   - Untuk setiap SID: ganti SID → loop tanggal → filter → screenshot → simpan.
-- Output folder: `output_mrtg_grouped/YYYYMMDD/MRTG_<SID>.png`
+- Output folder: `output_mrtg_sid/YYYYMMDD/MRTG_<SID>.png`
 
 ### 2. Script untuk Graph Title (menggunakan `mrtg_telkomcare_graphtitle.py`)
 
@@ -124,7 +124,7 @@ python mrtg_telkomcare_graphtitle.py
 ## 📂 Struktur Output
 
 ```
-output_mrtg_grouped/               # Untuk SID
+output_mrtg_sid/                   # Untuk SID
 ├── 20260101/
 │   ├── MRTG_4700001-0021497479.png
 │   ├── MRTG_4700001-0020265222.png
@@ -190,10 +190,10 @@ TEKAN ENTER SETELAH LOGIN...
    → Klik tombol grafik untuk SID 4700001-0021497479
    → Mengambil gambar untuk 01/01/2026
      [OK] 01/01/2026
-     ✅ Tersimpan: output_mrtg_grouped/20260101/MRTG_4700001-0021497479.png
+     ✅ Tersimpan: output_mrtg_sid/20260101/MRTG_4700001-0021497479.png
    → Mengambil gambar untuk 02/01/2026
      [OK] 02/01/2026
-     ✅ Tersimpan: output_mrtg_grouped/20260102/MRTG_4700001-0021497479.png
+     ✅ Tersimpan: output_mrtg_sid/20260102/MRTG_4700001-0021497479.png
 ✅ SID 4700001-0021497479: 2/2 gambar berhasil
 ...
 🎉 SELESAI! Total gambar berhasil: 36
@@ -206,7 +206,7 @@ TEKAN ENTER SETELAH LOGIN...
 | Variabel (di dalam script) | Default | Keterangan |
 |----------------------------|---------|-------------|
 | `MAX_RETRIES` | 2 | Jumlah percobaan ulang jika gambar gagal |
-| `FOLDER_OUTPUT` | `output_mrtg_grouped` / `output_mrtg_graphtitle` | Folder hasil |
+| `FOLDER_OUTPUT` | `output_mrtg_sid` / `output_mrtg_graphtitle` | Folder hasil |
 | `SID_FILE` / `GRAPH_TITLE_FILE` | `SID-MRTG.txt` / `GRAPH-TITLE-MRTG.txt` | Nama file input |
 
 ---
@@ -258,7 +258,7 @@ Buat folder `screenshots/` dan isi dengan gambar berikut:
 4. **`modal_popup.png`** – Untuk Graph Title: modal yang muncul setelah klik tombol grafik, berisi input `startdate`, `enddate`, tombol `Filter`.
 5. **`sample_graph_sid.png`** – Contoh grafik MRTG yang dihasilkan untuk SID (bisa dari folder output).
 6. **`sample_graph_graphtitle.png`** – Contoh grafik untuk Graph Title.
-7. **`output_structure.png`** – Tampilan folder `output_mrtg_grouped` dan `output_mrtg_graphtitle` di Windows Explorer.
+7. **`output_structure.png`** – Tampilan folder `output_mrtg_sid` dan `output_mrtg_graphtitle` di Windows Explorer.
 8. **`terminal_success.png`** – Terminal saat script berhasil menyelesaikan semua proses.
 9. **`environment_variables.png`** – (Opsional) Tampilan PATH environment variable lo.
 
@@ -275,24 +275,3 @@ Buat folder `screenshots/` dan isi dengan gambar berikut:
 - [x] `README.md` seperti di atas.
 - [x] Folder `screenshots/` dengan gambar-gambar yang diperlukan.
 - [x] `.gitignore` (tambahkan `output_*/`, `temp_*.png`, `venv/`, `__pycache__/`).
-
-Contoh `.gitignore`:
-```gitignore
-# Output folders
-output_*/
-temp_*.png
-
-# Virtual environment
-venv/
-env/
-
-# Python cache
-__pycache__/
-*.pyc
-
-# Sensitive files (optional)
-SID-MRTG.txt
-GRAPH-TITLE-MRTG.txt
-```
-
----
