@@ -194,7 +194,16 @@ def main():
     print("\nMembuka browser...")
     options = webdriver.ChromeOptions()
     options.add_argument("--start-maximized")
-    driver = webdriver.Chrome(service=Service(ChromeDriverManager().install()), options=options)
+    try:
+        driver = webdriver.Chrome(service=Service(ChromeDriverManager().install()), options=options)
+    except Exception as e:
+        print(f"\n[WARNING] Download ChromeDriver otomatis diblokir jaringan. Mencoba fallback...")
+        try:
+            driver = webdriver.Chrome(options=options)
+        except Exception as e2:
+            print("\n[ERROR FATAL] Gagal membuka Chrome. Silakan letakkan file 'chromedriver.exe' secara manual di folder ini.")
+            import sys; sys.exit(1)
+            
     driver.get("https://telkomcare.telkom.co.id/mrtgnetcare2/graph")
     
     print("\n" + "=" * 60)
