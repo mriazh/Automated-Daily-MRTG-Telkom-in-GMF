@@ -12,7 +12,7 @@
 
 - ✅ **Multi SID & Graph Title** – Baca daftar dari file teks.
 - ✅ **Rentang tanggal fleksibel** – Input manual mulai dan akhir.
-- ✅ **Validasi gambar dengan OCR** – Deteksi "Graph not available" pakai Tesseract.
+- ✅ **Validasi gambar dengan OCR** – Deteksi "Graph not available" dengan Tesseract dan memvalidasi resolusi gambar.
 - ✅ **Retry otomatis** – Jika gagal, ulang hingga 2 kali.
 - ✅ **Group by tanggal** – Output folder `YYYYMMDD/MRTG_<ID>.png`.
 - ✅ **Optimasi kecepatan** – Ganti SID/title sekali, lalu loop tanggal.
@@ -32,8 +32,8 @@
 
 ### Environment Variables (PATH)
 ```
-C:\Users\adima\AppData\Local\Python\bin
-C:\Users\adima\AppData\Local\Python\pythoncore-3.14-64\Scripts
+C:\Users\<username>\AppData\Local\Python\bin
+C:\Users\<username>\AppData\Local\Python\pythoncore-3.14-64\Scripts
 C:\Program Files\Tesseract-OCR
 ```
 > Pastikan `tesseract.exe` bisa diakses dari command line dengan `tesseract --version`.
@@ -60,7 +60,7 @@ C:\Program Files\Tesseract-OCR
    ```
 
 4. **Pastikan Tesseract terdeteksi**  
-   Edit baris berikut di kedua script jika path lo berbeda:
+   Edit baris berikut di kedua script jika path Anda berbeda:
    ```python
    pytesseract.pytesseract.tesseract_cmd = r'C:\Program Files\Tesseract-OCR\tesseract.exe'
    ```
@@ -98,9 +98,9 @@ python mrtg_telkomcare_sid.py
 ```
 
 **Alur:**
-- Browser terbuka → Login manual + CAPTCHA + MFA → Masuk ke Halaman yang dituju
-- Masukkan rentang tanggal (contoh: `1 1 2026` dan `31 1 2026`).
-- Tekan Enter di terminal.
+- Masukkan rentang tanggal di terminal (contoh: `1 1 2026` dan `31 1 2026`).
+- Browser terbuka → Login manual + CAPTCHA + MFA.
+- Setelah berhasil login, tekan Enter di terminal untuk memulai proses otomatisasi.
 - Script akan:
   - Membaca semua SID dari file.
   - Untuk setiap SID: ganti SID → loop tanggal → filter → screenshot → simpan.
@@ -141,24 +141,6 @@ output_mrtg_graphtitle/            # Untuk Graph Title
 │   └── ...
 └── ...
 ```
-
----
-
-## 🖼️ Screenshot yang Disarankan untuk GitHub
-
-Buat folder `screenshots/` di root repository, lalu isi dengan:
-
-1. **`login_page.png`** – Halaman login TelkomCare (sebelum login).
-2. **`dashboard.png`** – Setelah login, tampilan daftar graph (bisa SID atau Graph Title).
-3. **`modal_graph.png`** – Untuk Graph Title: modal popup yang berisi grafik.
-4. **`output_folder_structure.png`** – Tampilan folder output di Windows Explorer.
-5. **`terminal_success.png`** – Terminal saat script berhasil menyelesaikan semua SID.
-6. **`sample_graph.png`** – Contoh grafik MRTG yang berhasil di-screenshot.
-
-> Letakkan screenshot di `screenshots/` dan referensikan di README dengan markdown:
-> ```markdown
-> ![Dashboard](screenshots/dashboard.png)
-> ```
 
 ---
 
@@ -223,55 +205,4 @@ TEKAN ENTER SETELAH LOGIN...
 
 ---
 
-## 📄 Lisensi
-
-Script ini bebas digunakan untuk keperluan internal. Tidak untuk dijual.
-
----
-
-## 🤝 Kontribusi
-
-Jika menemukan bug atau ingin menambah fitur, silakan buat issue atau pull request.
-
----
-
-## 📧 Kontak
-
-- Nama: [Nama lo]
-- GitHub: [username lo]
-- Email: [email lo]
-
----
-
-**Selamat mencoba dan semoga membantu pekerjaan monitoring MRTG! 🚀**
-```
-
----
-
-## 📸 **Panduan Screenshot yang Harus Diambil**
-
-Buat folder `screenshots/` dan isi dengan gambar berikut:
-
-1. **`login_page.png`** – Tampilan awal `https://telkomcare.telkom.co.id/mrtgnetcare2/graph` (sebelum login).
-2. **`dashboard_sid.png`** – Setelah login, halaman dengan input `name="sid"` dan tabel daftar grafik.
-3. **`dashboard_graphtitle.png`** – Setelah login, halaman dengan input `name="graphtitle"` (jika berbeda).
-4. **`modal_popup.png`** – Untuk Graph Title: modal yang muncul setelah klik tombol grafik, berisi input `startdate`, `enddate`, tombol `Filter`.
-5. **`sample_graph_sid.png`** – Contoh grafik MRTG yang dihasilkan untuk SID (bisa dari folder output).
-6. **`sample_graph_graphtitle.png`** – Contoh grafik untuk Graph Title.
-7. **`output_structure.png`** – Tampilan folder `output_mrtg_sid` dan `output_mrtg_graphtitle` di Windows Explorer.
-8. **`terminal_success.png`** – Terminal saat script berhasil menyelesaikan semua proses.
-9. **`environment_variables.png`** – (Opsional) Tampilan PATH environment variable lo.
-
-> Taruh semua screenshot di folder `screenshots/`, lalu di README lo bisa tampilkan dengan `![caption](screenshots/nama_file.png)` jika ingin ditampilkan langsung. Atau cukup tautkan.
-
----
-
-## ✅ **Final Checklist untuk Push ke GitHub**
-
-- [x] `mrtg_telkomcare_sid.py` sudah final.
-- [x] `mrtg_telkomcare_graphtitle.py` sudah final.
-- [x] `SID-MRTG.txt` (contoh atau asli tapi jangan publikasikan data sensitif? Bisa gunakan contoh dummy).
-- [x] `GRAPH-TITLE-MRTG.txt` contoh.
-- [x] `README.md` seperti di atas.
-- [x] Folder `screenshots/` dengan gambar-gambar yang diperlukan.
-- [x] `.gitignore` (tambahkan `output_*/`, `temp_*.png`, `venv/`, `__pycache__/`).
+**Selamat mencoba dan semoga membantu pekerjaan monitoring MRTG! 🚀**
