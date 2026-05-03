@@ -214,3 +214,6 @@ __marimo__/
 
 # Streamlit
 .streamlit/secrets.toml
+# MRTG Output Folders
+output_mrtg_sid/
+output_mrtg_graphtitle/
