@@ -1,23 +1,22 @@
 # 📊 MRTG Automation Tool for TelkomCare
 
-**Otomatis screenshot grafik MRTG dari TelkomCare untuk banyak SID atau Graph Title, dengan validasi OCR dan retry otomatis.**
+**Aplikasi Desktop (GUI) & Terminal (CLI) untuk otomatisasi pengunduhan grafik MRTG dari TelkomCare berdasarkan SID atau Graph Title. Dilengkapi dengan validasi gambar (YCbCr), auto-navigasi, dan retry otomatis.**
 
 [![Python](https://img.shields.io/badge/Python-3.8%2B-blue)](https://python.org)
 [![Selenium](https://img.shields.io/badge/Selenium-4.x-green)](https://selenium.dev)
-[![Tesseract](https://img.shields.io/badge/Tesseract-5.x-orange)](https://github.com/UB-Mannheim/tesseract)
+[![PySide6](https://img.shields.io/badge/PySide6-Qt-yellow)](https://doc.qt.io/qtforpython/)
 
 ---
 
 ## 📌 Fitur Utama
 
-- ✅ **Multi SID & Graph Title** – Baca daftar dari file teks.
-- ✅ **Rentang tanggal fleksibel** – Input manual mulai dan akhir.
-- ✅ **Validasi gambar dengan OCR** – Deteksi "Graph not available" dengan Tesseract dan memvalidasi resolusi gambar.
-- ✅ **Retry otomatis** – Jika gagal, ulang hingga 2 kali.
-- ✅ **Group by tanggal** – Output folder `YYYYMMDD/MRTG_<ID>.png`.
-- ✅ **Optimasi kecepatan** – Ganti SID/title sekali, lalu loop tanggal.
-- ✅ **Handle modal popup** – Khusus untuk Graph Title.
-- ✅ **Login manual satu kali** – Aman untuk CAPTCHA dan MFA.
+- 💻 **Antarmuka Desktop (GUI)** – Tampilan GUI modern menggunakan PySide6 dengan fitur *Live Log*, Kalender (*Date Picker*), dan mode Dark/Light.
+- ⚙️ **Dua Mode Eksekusi** – Bisa dieksekusi secara interaktif melalui **GUI** atau secara tradisional melalui **CLI** (*Command Line*).
+- 🔄 **Unified Scraping Engine** – Pencarian berdasarkan **SID** maupun **Graph Title** kini tergabung dalam satu aplikasi.
+- 🎨 **Validasi Gambar YCbCr** – Logika tingkat lanjut untuk membedakan gambar grafik yang kosong (0 bps) dengan gambar *Error / No Graph* berdasarkan analisis warna, mencegah data yang sah terhapus otomatis.
+- 🧭 **Navigasi Sidebar Otomatis** – Setelah *login manual* sukses, bot akan otomatis mencarikan menu "Graph" dan masuk ke "Monitor Graph" atau "List Graph".
+- ✅ **Retry otomatis** – Fitur otomatis memuat ulang halaman (*refresh*) jika data tabel/grafik gagal dimuat (*Stale Element*).
+- 📂 **Group by Tanggal** – Output diorganisir rapi ke folder `YYYYMMDD/MRTG_<ID>.png`.
 
 ---
 
@@ -27,16 +26,8 @@
 |----------|-------------|
 | **Python 3.8+** | [Download](https://www.python.org/downloads/) |
 | **Google Chrome** | Browser terbaru |
-| **Tesseract OCR** | [Download](https://github.com/UB-Mannheim/tesseract/wiki) – pilih `tesseract-ocr-w64-setup-5.5.0.20241111.exe`, **centang "Add to PATH"** |
+| **Tesseract OCR (Opsional)**| [Download](https://github.com/UB-Mannheim/tesseract/wiki) – untuk fallback validasi teks jika gambar dirasa blur. |
 | **Internet** | Akses ke `telkomcare.telkom.co.id` |
-
-### Environment Variables (PATH)
-```
-C:\Users\<username>\AppData\Local\Python\bin
-C:\Users\<username>\AppData\Local\Python\pythoncore-3.14-64\Scripts
-C:\Program Files\Tesseract-OCR
-```
-> Pastikan `tesseract.exe` bisa diakses dari command line dengan `tesseract --version`.
 
 ---
 
@@ -56,140 +47,78 @@ C:\Program Files\Tesseract-OCR
 
 3. **Install library Python**
    ```bash
-   pip install selenium webdriver-manager pillow pytesseract
-   ```
-
-4. **Pastikan Tesseract terdeteksi**  
-   Edit baris berikut di kedua script jika path Anda berbeda:
-   ```python
-   pytesseract.pytesseract.tesseract_cmd = r'C:\Program Files\Tesseract-OCR\tesseract.exe'
+   pip install selenium webdriver-manager pillow pytesseract PySide6
    ```
 
 ---
 
 ## 📁 Persiapan File Input
 
-### Untuk SID – `SID-MRTG.txt`
-Buat file dengan format satu baris:
-```
+Buat dua file teks di folder yang sama dengan script:
+
+### 1. Untuk mode SID (`SID-MRTG.txt`)
+```text
 SID : 4700001-0021497479
 SID : 4700001-0020265222
 SID : 2007544330
-...
 ```
 
-### Untuk Graph Title – `GRAPH-TITLE-MRTG.txt`
-Buat file dengan format:
-```
+### 2. Untuk mode Graph Title (`GRAPH-TITLE-MRTG.txt`)
+```text
 Graph-title : 3598
 Graph-title : 3784
 ```
-
-> Letakkan file-file ini di folder yang sama dengan script.
 
 ---
 
 ## 🚀 Cara Penggunaan
 
-### 1. Script untuk SID (menggunakan `mrtg_telkomcare_sid.py`)
-
+### Opsi 1: Mode GUI (Sangat Direkomendasikan)
+Menjalankan aplikasi versi Desktop yang ramah pengguna.
 ```bash
-python mrtg_telkomcare_sid.py
+python mrtg_telkomcare_gui.py
 ```
-
 **Alur:**
-- Masukkan rentang tanggal di terminal (contoh: `1 1 2026` dan `31 1 2026`).
-- Browser terbuka → Login manual + CAPTCHA + MFA.
-- Setelah berhasil login, tekan Enter di terminal untuk memulai proses otomatisasi.
-- Script akan:
-  - Membaca semua SID dari file.
-  - Untuk setiap SID: ganti SID → loop tanggal → filter → screenshot → simpan.
-- Output folder: `output_mrtg_sid/YYYYMMDD/MRTG_<SID>.png`
+1. Pilih **Mode Pencarian** (SID atau Graph Title).
+2. Atur **Rentang Tanggal** melalui kalender.
+3. Klik tombol **"▶ Mulai Scraping"**. Browser Chrome akan terbuka.
+4. Lakukan **Login Manual** di browser (isi Username, Password, Captcha).
+5. Setelah berhasil login, klik tombol hijau **"✅ Lanjutkan (Sudah Login)"** di aplikasi.
+6. Bot akan berjalan otomatis. Kamu bisa pantau prosesnya secara live di kotak *Proses Log*.
 
-### 2. Script untuk Graph Title (menggunakan `mrtg_telkomcare_graphtitle.py`)
-
+### Opsi 2: Mode CLI (Terminal / Backup)
+Menjalankan script klasik berbasis terminal.
 ```bash
-python mrtg_telkomcare_graphtitle.py
+python mrtg_telkomcare_cli.py
 ```
-
 **Alur:**
-- Sama seperti SID, tapi menggunakan input `graphtitle` dan modal popup.
-- Setelah selesai satu title, halaman di-refresh untuk membersihkan state.
-- Output folder: `output_mrtg_graphtitle/YYYYMMDD/MRTG_<title>_YYYYMMDD.png`
-
-> **Catatan:** Untuk Graph Title, karena modal tidak bisa di-reset sempurna, script akan refresh halaman setiap berganti title. Ini memastikan gambar yang diambil sesuai.
+1. Script akan menanyakan opsi `1` (SID) atau `2` (Graph Title).
+2. Masukkan tanggal mulai dan akhir dengan format `DD MM YYYY` (contoh: `1 1 2026`).
+3. Lakukan **Login Manual** di Chrome.
+4. Setelah masuk ke halaman depan web, buka terminal lagi lalu tekan **`ENTER`**.
+5. Bot akan otomatis navigasi ke menu grafik dan memulai *scraping*.
 
 ---
 
 ## 📂 Struktur Output
 
+Hasil *screenshot* akan otomatis disimpan dengan struktur hierarki seperti ini (agar mudah dicari):
+
 ```
-output_mrtg_sid/                   # Untuk SID
+output_mrtg_sid/                   # Untuk hasil pencarian SID
 ├── 20260101/
 │   ├── MRTG_4700001-0021497479.png
-│   ├── MRTG_4700001-0020265222.png
-│   └── ...
+│   ├── MRTG_2007544330.png
 ├── 20260102/
 │   └── ...
-└── ...
 
-output_mrtg_graphtitle/            # Untuk Graph Title
+output_mrtg_graphtitle/            # Untuk hasil pencarian Graph Title
 ├── 20260101/
 │   ├── MRTG_3598_20260101.png
 │   └── MRTG_3784_20260101.png
 ├── 20260102/
 │   └── ...
-└── ...
 ```
-
----
-
-## 🧪 Contoh Penggunaan (Terminal)
-
-```
-============================================================
-AUTOMATED MRTG - OPTIMIZED (per SID loop tanggal)
-============================================================
-
-Ditemukan 18 SID unik
-
-Masukkan rentang tanggal (contoh: 1 1 2026 untuk 01/01/2026)
-==================================================
-Tanggal mulai (DD MM YYYY): 1 1 2026
-Tanggal akhir (DD MM YYYY): 2 1 2026
-
-Membuka browser...
-
-============================================================
-⚠️ LOGIN MANUAL, ISI CAPTCHA, LALU ENTER
-============================================================
-TEKAN ENTER SETELAH LOGIN...
-
-==================================================
-📁 PROSES SID 1/18: 4700001-0021497479
-==================================================
-   → Tekan Enter untuk SID 4700001-0021497479
-   → Klik tombol grafik untuk SID 4700001-0021497479
-   → Mengambil gambar untuk 01/01/2026
-     [OK] 01/01/2026
-     ✅ Tersimpan: output_mrtg_sid/20260101/MRTG_4700001-0021497479.png
-   → Mengambil gambar untuk 02/01/2026
-     [OK] 02/01/2026
-     ✅ Tersimpan: output_mrtg_sid/20260102/MRTG_4700001-0021497479.png
-✅ SID 4700001-0021497479: 2/2 gambar berhasil
-...
-🎉 SELESAI! Total gambar berhasil: 36
-```
-
----
-
-## ⚙️ Konfigurasi Lanjutan
-
-| Variabel (di dalam script) | Default | Keterangan |
-|----------------------------|---------|-------------|
-| `MAX_RETRIES` | 2 | Jumlah percobaan ulang jika gambar gagal |
-| `FOLDER_OUTPUT` | `output_mrtg_sid` / `output_mrtg_graphtitle` | Folder hasil |
-| `SID_FILE` / `GRAPH_TITLE_FILE` | `SID-MRTG.txt` / `GRAPH-TITLE-MRTG.txt` | Nama file input |
 
 ---
 
@@ -197,12 +126,11 @@ TEKAN ENTER SETELAH LOGIN...
 
 | Masalah | Solusi |
 |---------|--------|
-| `TesseractNotFoundError` | Pastikan path tesseract sudah benar di script dan Tesseract terinstal. Cek dengan `tesseract --version` di CMD. |
-| Alert `DataTables warning` | SID tidak valid. Script akan skip otomatis. |
-| Gambar ganda atau salah title | Untuk Graph Title, script sudah melakukan refresh antar title. Pastikan file `GRAPH-TITLE-MRTG.txt` berisi title yang benar. |
-| Modal tidak terbuka | Periksa apakah tombol `a.btn-graph` masih ada. Bisa juga coba manual melalui browser. |
-| Stale element reference | Script sudah menggunakan JavaScript dan loop pencarian ulang. Jika masih terjadi, coba tambah `time.sleep()` di beberapa bagian. |
+| **GUI Freeze / Not Responding** | Pastikan kamu menjalankan `mrtg_telkomcare_gui.py`. (Script ini sudah mendukung multithreading sehingga dipastikan aman dari freeze). |
+| **Gambar kosong/0 bps terhapus** | Algoritma `YCbCr` terbaru sudah mendeteksi perbedaan *blank error* vs *data nol*. Namun, jika server TelkomCare down dan mengembalikan gambar *pure grayscale*, gambar akan tetap dibuang. |
+| **Gagal Navigasi Sidebar** | Bot gagal ngeklik menu "Graph". Biasanya karena koneksi internet lambat setelah login. Bot akan tetap melanjutkan eksekusi jika gagal, tapi kamu harus menavigasinya secara manual jika ini terjadi. |
+| **TesseractNotFoundError** | Cek kembali *path* Tesseract di file `mrtg_telkomcare_gui.py` baris instalasi (`pytesseract.tesseract_cmd`). |
 
 ---
 
-**Selamat mencoba dan semoga membantu pekerjaan monitoring MRTG! 🚀**
+*Dikembangkan untuk kemudahan otomasi & monitoring trafik operasional harian! 🚀*
