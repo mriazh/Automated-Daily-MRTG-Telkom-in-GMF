@@ -31,15 +31,25 @@
 
 ---
 
-## 📦 Instalasi
+## 📦 Cara Mendapatkan Aplikasi (Instalasi)
 
+### Opsi A: Menggunakan `.exe` Standalone (Sangat Disarankan)
+Cara ini paling mudah karena kamu tidak perlu menginstal Python atau alat tambahan apapun.
+1. Buka halaman **Releases** di sebelah kanan atas repository GitHub ini.
+2. Download file **`mrtg_telkomcare_gui.exe`**.
+3. Letakkan file tersebut di dalam satu folder kosong (misalnya di Desktop).
+4. Buat file `SID-MRTG.txt` dan `GRAPH-TITLE-MRTG.txt` di folder yang sama.
+5. Klik 2x file `.exe` tersebut, aplikasi siap digunakan!
+
+### Opsi B: Menggunakan Script Python (Developer Mode)
+Jika kamu ingin memodifikasi kode sumber atau menjalankan script secara native:
 1. **Clone repository** (atau download zip)
    ```bash
    git clone https://github.com/username/mrtg-automation.git
    cd mrtg-automation
    ```
 
-2. **Buat virtual environment (opsional tapi disarankan)**
+2. **Buat virtual environment (opsional)**
    ```bash
    python -m venv venv
    venv\Scripts\activate      # Windows
@@ -47,7 +57,7 @@
 
 3. **Install library Python**
    ```bash
-   pip install selenium webdriver-manager pillow pytesseract PySide6
+   pip install selenium pillow pytesseract PySide6
    ```
 
 ---
