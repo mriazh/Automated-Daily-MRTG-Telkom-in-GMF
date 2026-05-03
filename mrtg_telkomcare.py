@@ -17,7 +17,7 @@ from PIL import Image
 pytesseract.pytesseract.tesseract_cmd = r'C:\Program Files\Tesseract-OCR\tesseract.exe'
 
 # ========== KONFIGURASI ==========
-MAX_RETRIES = 2
+MAX_RETRIES = 3
 
 CONFIG = {
     "sid": {
@@ -88,17 +88,18 @@ def is_graph_not_available(image_path):
             return True
 
         # Fallback visual check (berjalan meski tanpa Tesseract)
-        grayscale = img.convert("L")
-        pixels = list(grayscale.tobytes())
-        if len(pixels) > 0:
-            avg_brightness = sum(pixels) / len(pixels)
-            # Hitung variance (seberapa seragam warnanya)
-            variance = sum((p - avg_brightness) ** 2 for p in pixels) / len(pixels)
+        # Grafik MRTG asli selalu punya kotak warna di legend (hijau/biru) dan grid merah.
+        # Gambar error "No graph" biasanya berupa teks hitam/abu pada background putih/abu (grayscale murni).
+        ycbcr = img.convert("YCbCr")
+        extrema = ycbcr.getextrema()
+        # extrema = ((Ymin, Ymax), (Cbmin, Cbmax), (Crmin, Crmax))
+        cb_diff = extrema[1][1] - extrema[1][0]
+        cr_diff = extrema[2][1] - extrema[2][0]
 
-            # Gambar "No graph" = hampir seluruhnya abu/putih dengan variance rendah
-            if avg_brightness > 200 and variance < 1500:
-                print(f"     → Terdeteksi blank/error (brightness={avg_brightness:.0f}, variance={variance:.0f})")
-                return True
+        # Jika gambar hampir tidak punya warna sama sekali (grayscale), cb_diff dan cr_diff sangat kecil
+        if cb_diff < 15 and cr_diff < 15:
+            print(f"     → Terdeteksi blank/error (gambar tidak berwarna: cb_diff={cb_diff}, cr_diff={cr_diff})")
+            return True
 
         # OCR check (jika Tesseract terinstall)
         try:
@@ -168,7 +169,7 @@ def ganti_sid(driver, sid):
         input_sid.send_keys(Keys.ENTER)
         print(f"   → Tekan Enter untuk SID {sid}")
 
-        time.sleep(2)
+        time.sleep(5) # Tambah waktu tunggu agar tabel selesai refresh dan menghindari stale element
         if tutup_alert_jika_ada(driver):
             print(f"   → Alert muncul, SID {sid} tidak valid")
             return False
@@ -300,9 +301,7 @@ def ambil_gambar_tanggal_graphtitle(driver, graph_title, tanggal):
             time.sleep(0.5)
 
             driver.execute_script("document.getElementById('graphfilter').click();")
-            
-            # Tambah waktu tunggu karena kadang web server lemot nge-generate grafik baru
-            time.sleep(8)
+            time.sleep(5)
 
             driver.execute_script("window.scrollTo(0, document.body.scrollHeight);")
             time.sleep(1)
@@ -353,7 +352,7 @@ def ambil_gambar_tanggal_graphtitle(driver, graph_title, tanggal):
                     input_title.send_keys(graph_title)
                     time.sleep(0.5)
                     input_title.send_keys(Keys.ENTER)
-                    time.sleep(2)
+                    time.sleep(5) # Waktu tunggu dinaikkan agar tabel selesai difilter
                     tombol_grafik = driver.find_element(By.CSS_SELECTOR, "a.btn-graph")
                     driver.execute_script("arguments[0].scrollIntoView({block: 'center'});", tombol_grafik)
                     time.sleep(0.5)
@@ -379,7 +378,7 @@ def proses_graph_title(driver, graph_title, start_date, end_date, folder_output)
         time.sleep(0.5)
         input_title.send_keys(Keys.ENTER)
         print(f"   → Tekan Enter untuk graph title: {graph_title}")
-        time.sleep(2)
+        time.sleep(5) # Waktu tunggu dinaikkan agar tabel selesai difilter
 
         tombol_grafik = driver.find_element(By.CSS_SELECTOR, "a.btn-graph")
         driver.execute_script("arguments[0].scrollIntoView({block: 'center'});", tombol_grafik)
