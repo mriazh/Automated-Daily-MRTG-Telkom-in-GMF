@@ -1,5 +1,11 @@
 import sys
 import os
+
+# FIX for PyInstaller --windowed mode deadlocks
+if sys.stdout is None:
+    sys.stdout = open(os.devnull, "w")
+if sys.stderr is None:
+    sys.stderr = open(os.devnull, "w")
 import time
 import threading
 from datetime import datetime, timedelta
@@ -14,7 +20,7 @@ from PySide6.QtGui import QFont, QTextCursor, QIcon, QPalette, QColor
 
 from selenium import webdriver
 from selenium.webdriver.chrome.service import Service
-from webdriver_manager.chrome import ChromeDriverManager
+from selenium.webdriver.chrome.options import Options
 from selenium.webdriver.common.by import By
 from selenium.webdriver.support.ui import WebDriverWait
 from selenium.webdriver.support import expected_conditions as EC
@@ -24,21 +30,30 @@ import pytesseract
 from PIL import Image
 
 # ========== KONFIGURASI ==========
-pytesseract.pytesseract.tesseract_cmd = r'C:\Program Files\Tesseract-OCR\tesseract.exe'
+if getattr(sys, 'frozen', False):
+    # Dijalankan sebagai .exe tunggal (PyInstaller)
+    base_path = sys._MEIPASS
+    app_dir = os.path.dirname(sys.executable)
+else:
+    # Dijalankan sebagai script python biasa
+    base_path = os.path.dirname(os.path.abspath(__file__))
+    app_dir = base_path
+
+pytesseract.pytesseract.tesseract_cmd = os.path.join(base_path, 'tesseract-portable', 'tesseract.exe')
 MAX_RETRIES = 3
 
 CONFIG = {
     "sid": {
-        "file": "SID-MRTG.txt",
-        "output": "output_mrtg_sid",
+        "file": os.path.join(app_dir, "SID-MRTG.txt"),
+        "output": os.path.join(app_dir, "output_mrtg_sid"),
         "url": "http://telkomcare.telkom.co.id/mrtgnetcare2/graph/monitoring",
         "input_name": "sid",
         "prefix": "SID : ",
         "label": "SID"
     },
     "graphtitle": {
-        "file": "GRAPH-TITLE-MRTG.txt",
-        "output": "output_mrtg_graphtitle",
+        "file": os.path.join(app_dir, "GRAPH-TITLE-MRTG.txt"),
+        "output": os.path.join(app_dir, "output_mrtg_graphtitle"),
         "url": "https://telkomcare.telkom.co.id/mrtgnetcare2/graph",
         "input_name": "graphtitle",
         "prefix": "Graph-title : ",
@@ -82,18 +97,23 @@ class ScraperWorker(QThread):
 
     def setup_browser(self):
         self.log("\nMembuka browser Chrome...")
-        options = webdriver.ChromeOptions()
+        import subprocess
+        
+        options = Options()
         options.add_argument("--start-maximized")
+        options.add_experimental_option("excludeSwitches", ["enable-logging"])
+        
         try:
-            driver = webdriver.Chrome(service=Service(ChromeDriverManager().install()), options=options)
-        except Exception:
-            self.log("\n[WARNING] Download ChromeDriver otomatis diblokir jaringan. Mencoba fallback...")
-            try:
-                driver = webdriver.Chrome(options=options)
-            except Exception:
-                self.log("\n[ERROR FATAL] Gagal membuka Chrome. Silakan letakkan file 'chromedriver.exe' secara manual.")
-                return None
-        return driver
+            # Menggunakan Selenium Manager bawaan (Selenium >= 4.6)
+            # log_output=os.devnull penting agar pipe tidak hang di mode --windowed
+            service = Service(log_output=os.devnull)
+            service.creation_flags = subprocess.CREATE_NO_WINDOW
+            driver = webdriver.Chrome(service=service, options=options)
+            return driver
+        except Exception as e:
+            self.log(f"\n[ERROR FATAL] Gagal membuka Chrome: {e}")
+            self.log("Solusi: Coba update Google Chrome, atau letakkan file 'chromedriver.exe' secara manual di folder ini.")
+            return None
 
     def tutup_alert_jika_ada(self, driver):
         try:
@@ -447,6 +467,14 @@ class ScraperWorker(QThread):
         return total_sukses
 
     def run(self):
+        try:
+            self._run()
+        except Exception as e:
+            import traceback
+            self.log(f"\n[CRITICAL THREAD ERROR] {e}\n{traceback.format_exc()}")
+            self.signals.finished.emit()
+
+    def _run(self):
         self.log("=" * 60)
         self.log("    AUTOMATED MRTG SCREENSHOT - TELKOMCARE")
         self.log("=" * 60)
