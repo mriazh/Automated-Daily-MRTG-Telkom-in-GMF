@@ -509,6 +509,32 @@ def main():
     print("=" * 60)
     input("TEKAN ENTER SETELAH LOGIN...")
 
+    print("\n   → Melakukan navigasi otomatis ke halaman grafik...")
+    try:
+        # Klik menu "Graph"
+        menu_graph = WebDriverWait(driver, 10).until(
+            EC.element_to_be_clickable((By.XPATH, "//a[@data-id='2']"))
+        )
+        menu_graph.click()
+        time.sleep(1.5)
+
+        # Klik submenu sesuai mode
+        if mode == "sid":
+            submenu = WebDriverWait(driver, 10).until(
+                EC.element_to_be_clickable((By.XPATH, "//a[contains(@href, '/mrtgnetcare2/graph/monitoring')]"))
+            )
+            submenu.click()
+        else:
+            submenu = WebDriverWait(driver, 10).until(
+                EC.element_to_be_clickable((By.XPATH, "//a[@data-id='1' and contains(@href, '/mrtgnetcare2/graph')]"))
+            )
+            submenu.click()
+        
+        print("   ✅ Navigasi berhasil")
+        time.sleep(3) # Tunggu halaman grafik termuat sepenuhnya
+    except Exception as e:
+        print(f"   ❌ Gagal navigasi otomatis (lanjut memproses): {str(e)[:80]}")
+
     os.makedirs(cfg["output"], exist_ok=True)
 
     # Jalankan sesuai mode
