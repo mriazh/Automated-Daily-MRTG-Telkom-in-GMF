@@ -10,7 +10,7 @@ from PySide6.QtWidgets import (
     QTextEdit, QGroupBox, QMessageBox
 )
 from PySide6.QtCore import Qt, QThread, Signal, QObject, QDate
-from PySide6.QtGui import QFont, QTextCursor
+from PySide6.QtGui import QFont, QTextCursor, QIcon
 
 from selenium import webdriver
 from selenium.webdriver.chrome.service import Service
@@ -532,8 +532,9 @@ class MainWindow(QMainWindow):
     def __init__(self):
         super().__init__()
         self.setWindowTitle("MRTG TelkomCare Scraper")
+        self.setWindowIcon(QIcon(os.path.join(os.path.dirname(__file__), "app_icon.png")))
         self.resize(750, 600)
-        self.is_dark_mode = False
+        self.theme_state = 0 # 0: System, 1: Dark, 2: Light
         
         # Main Layout
         central_widget = QWidget()
@@ -543,8 +544,8 @@ class MainWindow(QMainWindow):
         # Header Theme Toggle
         theme_layout = QHBoxLayout()
         theme_layout.addStretch()
-        self.btn_theme = QPushButton("☀️ Light Mode")
-        self.btn_theme.setFixedWidth(120)
+        self.btn_theme = QPushButton("🖥️ Theme: System")
+        self.btn_theme.setFixedWidth(140)
         self.btn_theme.clicked.connect(self.toggle_theme)
         theme_layout.addWidget(self.btn_theme)
         main_layout.addLayout(theme_layout)
@@ -609,7 +610,7 @@ class MainWindow(QMainWindow):
         self.worker = None
 
     def apply_theme(self):
-        if self.is_dark_mode:
+        if self.theme_state == 1: # Dark
             self.setStyleSheet("""
                 QMainWindow, QWidget { background-color: #1e1e2e; color: #cdd6f4; }
                 QGroupBox { border: 1px solid #45475a; margin-top: 10px; padding-top: 10px; }
@@ -619,8 +620,8 @@ class MainWindow(QMainWindow):
                 QPushButton:hover { background-color: #45475a; }
                 QDateEdit { background-color: #313244; color: #cdd6f4; border: 1px solid #45475a; padding: 3px; }
             """)
-            self.btn_theme.setText("☀️ Light Mode")
-        else:
+            self.btn_theme.setText("🌙 Theme: Dark")
+        elif self.theme_state == 2: # Light
             self.setStyleSheet("""
                 QMainWindow, QWidget { background-color: #f8f9fa; color: #212529; }
                 QGroupBox { border: 1px solid #dee2e6; margin-top: 10px; padding-top: 10px; }
@@ -630,7 +631,10 @@ class MainWindow(QMainWindow):
                 QPushButton:hover { background-color: #dee2e6; }
                 QDateEdit { background-color: #ffffff; color: #212529; border: 1px solid #ced4da; padding: 3px; }
             """)
-            self.btn_theme.setText("🌙 Dark Mode")
+            self.btn_theme.setText("☀️ Theme: Light")
+        else: # System
+            self.setStyleSheet("") # Hapus custom style untuk menggunakan tema bawaan OS
+            self.btn_theme.setText("🖥️ Theme: System")
         
         # Override btn_continue specifically
         if not self.btn_continue.isEnabled():
@@ -639,7 +643,7 @@ class MainWindow(QMainWindow):
             self.btn_continue.setStyleSheet("font-weight: bold; background-color: #198754; color: white;")
 
     def toggle_theme(self):
-        self.is_dark_mode = not self.is_dark_mode
+        self.theme_state = (self.theme_state + 1) % 3
         self.apply_theme()
 
     def append_log(self, text):
