@@ -22,7 +22,7 @@ Bot otomatisasi super presisi untuk mengambil screenshot grafik MRTG dari portal
 1.  **Install Python**: Pastikan Python 3.10+ sudah terinstall.
 2.  **Install Dependencies**:
     ```bash
-    pip install selenium webdriver-manager PySide6 rich tqdm Pillow
+    pip install -r requirements.txt
     ```
 3.  **Setup Tesseract (Opsional)**: Pastikan Tesseract OCR terinstall jika ingin menggunakan fitur validasi teks gambar.
 4.  **Input Data**:
