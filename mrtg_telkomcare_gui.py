@@ -1,14 +1,17 @@
 import sys
 import os
+import time
+import threading
+import ctypes
+import logging
+import traceback
+from datetime import datetime, timedelta
 
 # FIX for PyInstaller --windowed mode deadlocks
 if sys.stdout is None:
     sys.stdout = open(os.devnull, "w")
 if sys.stderr is None:
     sys.stderr = open(os.devnull, "w")
-import time
-import threading
-from datetime import datetime, timedelta
 
 from PySide6.QtWidgets import (
     QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout,
@@ -20,28 +23,37 @@ from PySide6.QtGui import QFont, QTextCursor, QIcon, QPalette, QColor
 
 from selenium import webdriver
 from selenium.webdriver.chrome.service import Service
-from selenium.webdriver.chrome.options import Options
+from webdriver_manager.chrome import ChromeDriverManager
 from selenium.webdriver.common.by import By
 from selenium.webdriver.support.ui import WebDriverWait
 from selenium.webdriver.support import expected_conditions as EC
 from selenium.webdriver.common.keys import Keys
-from selenium.common.exceptions import UnexpectedAlertPresentException, NoAlertPresentException
-import pytesseract
-from PIL import Image
+from selenium.common.exceptions import (
+    UnexpectedAlertPresentException, 
+    NoAlertPresentException,
+    TimeoutException,
+    StaleElementReferenceException
+)
 
-# ========== KONFIGURASI ==========
+# ========== KONFIGURASI LOGGING (SAMA DENGAN CLI) ==========
+LOG_FILE = "mrtg_process.log"
+logging.basicConfig(
+    level=logging.INFO,
+    format="[%(asctime)s] [%(levelname)-8s] %(message)s",
+    datefmt="%Y-%m-%d %H:%M:%S",
+    handlers=[logging.FileHandler(LOG_FILE, encoding='utf-8')],
+)
+logger = logging.getLogger(__name__)
+
+# ========== KONFIGURASI PATH ==========
 if getattr(sys, 'frozen', False):
-    # Dijalankan sebagai .exe tunggal (PyInstaller)
     base_path = sys._MEIPASS
     app_dir = os.path.dirname(sys.executable)
 else:
-    # Dijalankan sebagai script python biasa
     base_path = os.path.dirname(os.path.abspath(__file__))
     app_dir = base_path
 
-pytesseract.pytesseract.tesseract_cmd = os.path.join(base_path, 'tesseract-portable', 'tesseract.exe')
 MAX_RETRIES = 3
-
 CONFIG = {
     "sid": {
         "file": os.path.join(app_dir, "SID-MRTG.txt"),
@@ -61,690 +73,303 @@ CONFIG = {
     }
 }
 
-
 class WorkerSignals(QObject):
     log_msg = Signal(str)
     login_ready = Signal()
     finished = Signal()
 
-
 class ScraperWorker(QThread):
     def __init__(self, mode, start_date, end_date):
         super().__init__()
         self.mode = mode
+        self.cfg = CONFIG[mode]
         self.start_date = start_date
         self.end_date = end_date
         self.signals = WorkerSignals()
         self.login_event = threading.Event()
         self.is_running = True
+        self.driver = None
 
-    def log(self, text):
-        self.signals.log_msg.emit(text)
+    def log(self, text, level="info"):
+        clean_text = text.strip()
+        if clean_text:
+            self.signals.log_msg.emit(text)
+            if level == "info": logger.info(clean_text)
+            elif level == "error": logger.error(clean_text)
+            elif level == "warning": logger.warning(clean_text)
 
-    def baca_item_dari_file(self, filepath, prefix):
-        items = []
+    def stop(self):
+        self.is_running = False
+        self.login_event.set()
+
+    def hide_browser_gaib(self):
         try:
-            with open(filepath, "r", encoding="utf-8") as f:
-                for line in f:
-                    line = line.strip()
-                    if line.startswith(prefix):
-                        item = line.replace(prefix, "").strip()
-                        if item:
-                            items.append(item)
-        except Exception as e:
-            self.log(f"[ERROR] Gagal membaca file {filepath}: {e}")
-        return list(dict.fromkeys(items))
+            self.driver.execute_script("document.title = 'BOT_MRTG_TELKOMCARE';")
+            time.sleep(2)
+            user32 = ctypes.windll.user32
+            target_title = "BOT_MRTG_TELKOMCARE"
+            @ctypes.WINFUNCTYPE(ctypes.c_bool, ctypes.c_void_p, ctypes.c_void_p)
+            def enum_cb(hwnd, _):
+                if user32.IsWindowVisible(hwnd):
+                    length = user32.GetWindowTextLengthW(hwnd)
+                    if length > 0:
+                        buf = ctypes.create_unicode_buffer(length + 1)
+                        user32.GetWindowTextW(hwnd, buf, length + 1)
+                        if target_title in buf.value:
+                            user32.ShowWindow(hwnd, 0)
+                return True
+            user32.EnumWindows(enum_cb, 0)
+        except: pass
 
-    def setup_browser(self):
-        self.log("\nMembuka browser Chrome...")
-        import subprocess
-        
-        options = Options()
-        options.add_argument("--start-maximized")
-        options.add_experimental_option("excludeSwitches", ["enable-logging"])
-        
+    def handle_alerts(self):
         try:
-            # Menggunakan Selenium Manager bawaan (Selenium >= 4.6)
-            # log_output=os.devnull penting agar pipe tidak hang di mode --windowed
-            service = Service(log_output=os.devnull)
-            service.creation_flags = subprocess.CREATE_NO_WINDOW
-            driver = webdriver.Chrome(service=service, options=options)
-            return driver
-        except Exception as e:
-            self.log(f"\n[ERROR FATAL] Gagal membuka Chrome: {e}")
-            self.log("Solusi: Coba update Google Chrome, atau letakkan file 'chromedriver.exe' secara manual di folder ini.")
-            return None
-
-    def tutup_alert_jika_ada(self, driver):
-        try:
-            alert = driver.switch_to.alert
-            self.log(f"     → Alert: {alert.text[:50]}")
+            alert = self.driver.switch_to.alert
+            self.log(f"⚠️  Alert terdeteksi: {alert.text[:50]}...", "warning")
             alert.accept()
-            time.sleep(1)
             return True
-        except NoAlertPresentException:
-            return False
+        except NoAlertPresentException: return False
 
-    def is_graph_not_available(self, image_path):
+    def wait_for_loading_and_kill_it(self):
         try:
-            img = Image.open(image_path)
-            if img.width < 50 or img.height < 50:
+            WebDriverWait(self.driver, 10).until(
+                EC.invisibility_of_element_located((By.CSS_SELECTOR, ".blockUI, .loading, .spinner, .ajax-loader"))
+            )
+            self.driver.execute_script("document.querySelectorAll('.blockUI, .blockOverlay, .blockMsg, .loading').forEach(el => el.remove());")
+        except: pass
+
+    def isolate_image_for_capture(self, img_el):
+        try:
+            js_isolate = """
+                var target = arguments[0];
+                window._hidden_elements = [];
+                var ancestors = [];
+                var curr = target;
+                while (curr) { ancestors.push(curr); curr = curr.parentNode; }
+                document.body.querySelectorAll('*').forEach(el => {
+                    if (el.style.display !== 'none' && !ancestors.includes(el)) {
+                        window._hidden_elements.push({el: el, display: el.style.display});
+                        el.style.setProperty('display', 'none', 'important');
+                    }
+                });
+                document.documentElement.style.setProperty('overflow', 'hidden', 'important');
+                document.body.style.setProperty('overflow', 'hidden', 'important');
+                document.body.style.setProperty('margin', '0', 'important');
+                document.body.style.setProperty('padding', '0', 'important');
+                document.body.style.setProperty('background', 'white', 'important');
+                target.style.setProperty('display', 'block', 'important');
+                target.style.setProperty('visibility', 'visible', 'important');
+                target.style.setProperty('position', 'fixed', 'important');
+                target.style.setProperty('top', '0', 'important');
+                target.style.setProperty('left', '0', 'important');
+                target.style.setProperty('width', target.naturalWidth + 'px', 'important');
+                target.style.setProperty('height', target.naturalHeight + 'px', 'important');
+                target.style.setProperty('z-index', '99999999', 'important');
+                window.scrollTo(0, 0);
+            """
+            self.driver.execute_script(js_isolate, img_el)
+        except: pass
+
+    def restore_ui_after_capture(self, img_el):
+        try:
+            js_restore = """
+                var target = arguments[0];
+                if (window._hidden_elements) {
+                    window._hidden_elements.forEach(item => {
+                        item.el.style.display = item.display;
+                    });
+                }
+                document.documentElement.style.removeProperty('overflow');
+                document.body.style.removeProperty('overflow');
+                document.body.style.removeProperty('margin');
+                document.body.style.removeProperty('padding');
+                document.body.style.removeProperty('background');
+                target.style.removeProperty('position');
+                target.style.removeProperty('top');
+                target.style.removeProperty('left');
+                target.style.removeProperty('width');
+                target.style.removeProperty('height');
+                target.style.removeProperty('z-index');
+            """
+            self.driver.execute_script(js_restore, img_el)
+        except: pass
+
+    def ganti_target_with_retry(self, target_value):
+        input_name = self.cfg["input_name"]
+        for attempt in range(1, MAX_RETRIES + 1):
+            if not self.is_running: return False
+            try:
+                input_elem = WebDriverWait(self.driver, 10).until(EC.element_to_be_clickable((By.NAME, input_name)))
+                input_elem.clear()
+                input_elem.send_keys(target_value)
+                time.sleep(0.5); input_elem.send_keys(Keys.ENTER); time.sleep(2)
+                btn = WebDriverWait(self.driver, 10).until(EC.element_to_be_clickable((By.CSS_SELECTOR, "a.btn-graph")))
+                self.driver.execute_script("arguments[0].scrollIntoView({block: 'center'});", btn)
+                time.sleep(1); self.driver.execute_script("arguments[0].click();", btn)
                 return True
-
-            ycbcr = img.convert("YCbCr")
-            extrema = ycbcr.getextrema()
-            cb_diff = extrema[1][1] - extrema[1][0]
-            cr_diff = extrema[2][1] - extrema[2][0]
-
-            if cb_diff < 15 and cr_diff < 15:
-                self.log(f"     → Terdeteksi blank/error (gambar tidak berwarna: cb_diff={cb_diff}, cr_diff={cr_diff})")
-                return True
-
-            try:
-                img_resized = img.resize((img.width * 2, img.height * 2), Image.Resampling.LANCZOS)
-                text = pytesseract.image_to_string(img_resized).lower()
-                error_keywords = ["no graph", "graph not available", "not available", "no data"]
-                for keyword in error_keywords:
-                    if keyword in text:
-                        return True
-            except Exception:
-                pass 
-
-            return False
-        except Exception as e:
-            self.log(f"     → Validasi error: {e}")
-            return False
-
-    # ========== SID MODE FUNCTIONS ==========
-    def ganti_sid(self, driver, sid):
-        try:
-            input_sid = WebDriverWait(driver, 10).until(EC.presence_of_element_located((By.NAME, "sid")))
-            input_sid.clear()
-            input_sid.send_keys(sid)
-            time.sleep(0.5)
-            input_sid.send_keys(Keys.ENTER)
-            self.log(f"   → Tekan Enter untuk SID {sid}")
-
-            time.sleep(5)
-            if self.tutup_alert_jika_ada(driver):
-                self.log(f"   → Alert muncul, SID {sid} tidak valid")
-                return False
-
-            tombol_grafik = WebDriverWait(driver, 10).until(EC.element_to_be_clickable((By.CSS_SELECTOR, "a.btn-graph")))
-            driver.execute_script("arguments[0].scrollIntoView({block: 'center'});", tombol_grafik)
-            time.sleep(0.5)
-            driver.execute_script("arguments[0].click();", tombol_grafik)
-            self.log(f"   → Klik tombol grafik untuk SID {sid}")
-            time.sleep(3)
-            return True
-        except UnexpectedAlertPresentException:
-            self.tutup_alert_jika_ada(driver)
-            return False
-        except Exception as e:
-            self.log(f"   → ERROR ganti SID: {str(e)[:80]}")
-            return False
-
-    def reset_halaman_sid(self, driver):
-        self.log("     → Refresh halaman...")
-        driver.refresh()
-        time.sleep(5)
-        self.tutup_alert_jika_ada(driver)
-        try:
-            for _ in range(20):
-                try:
-                    driver.find_element(By.NAME, "sid")
-                    return True
-                except:
-                    time.sleep(0.5)
-            return False
-        except:
-            return False
-
-    def ambil_gambar_tanggal_sid(self, driver, sid, tanggal):
-        tgl_str = tanggal.strftime("%d/%m/%Y")
-        tahun = tanggal.strftime("%Y")
-        bulan = tanggal.strftime("%m")
-        hari = tanggal.strftime("%d")
-        waktu_awal = f"{tgl_str} 00:00"
-        waktu_akhir = f"{tgl_str} 23:55"
-        temp_file = f"temp_{sid}_{tahun}{bulan}{hari}.png"
-
-        for percobaan in range(1, MAX_RETRIES + 1):
-            if not self.is_running: break
-            try:
-                inputs_tanggal = driver.find_elements(By.XPATH, "//button[contains(normalize-space(), 'Filter')]/preceding::input[not(@type='hidden')]")
-                if len(inputs_tanggal) >= 2:
-                    input_start = inputs_tanggal[-2]
-                    input_end = inputs_tanggal[-1]
-                    driver.execute_script("arguments[0].value = arguments[1];", input_start, waktu_awal)
-                    driver.execute_script("arguments[0].value = arguments[1];", input_end, waktu_akhir)
-                else:
-                    self.log(f"     [SKIP] Kolom tanggal tidak ditemukan")
-                    return None
-
-                tombol_filter = driver.find_element(By.XPATH, "//button[contains(normalize-space(), 'Filter')]")
-                driver.execute_script("arguments[0].click();", tombol_filter)
-
-                grafik_img = WebDriverWait(driver, 20).until(
-                    EC.presence_of_element_located((By.XPATH, "//img[contains(@src, 'graph.php')]"))
-                )
-                driver.execute_script("arguments[0].scrollIntoView({block: 'center'});", grafik_img)
-                time.sleep(2)
-
-                grafik_img.screenshot(temp_file)
-
-                if self.is_graph_not_available(temp_file):
-                    self.log(f"     [GAGAL] {tgl_str} - Graph not available")
-                    os.remove(temp_file)
-                    raise Exception("Graph not available")
-
-                self.log(f"     [OK] {tgl_str}")
-                return temp_file
-
             except Exception as e:
-                self.log(f"     [PERCOBAAN {percobaan}] {sid} - {tgl_str} gagal: {str(e)[:60]}")
-                if percobaan < MAX_RETRIES:
-                    self.reset_halaman_sid(driver)
-                    if not self.ganti_sid(driver, sid):
-                        return None
-                    time.sleep(2)
-                else:
-                    if os.path.exists(temp_file):
-                        os.remove(temp_file)
-                    return None
-        return None
+                self.handle_alerts()
+                if attempt < MAX_RETRIES:
+                    self.log(f"   ⚠️  Retry {attempt}/{MAX_RETRIES} untuk {target_value}...", "warning")
+                    self.driver.refresh(); time.sleep(10)
+        return False
 
-    def run_mode_sid(self, driver, items, cfg):
-        total_sukses = 0
-        total_hari = (self.end_date - self.start_date).days + 1
-        for idx, sid in enumerate(items, start=1):
-            if not self.is_running: break
-            self.log(f"\n{'='*50}")
-            self.log(f"📁 PROSES SID {idx}/{len(items)}: {sid}")
-            self.log(f"{'='*50}")
-
-            if not self.ganti_sid(driver, sid):
-                self.log(f"❌ Skip SID {sid} (gagal ganti SID)")
-                self.reset_halaman_sid(driver)
-                continue
-
-            sukses = 0
-            current_date = self.start_date
-            while current_date <= self.end_date:
-                if not self.is_running: break
-                tgl_str = current_date.strftime("%Y%m%d")
-                folder_tanggal = os.path.join(cfg["output"], tgl_str)
-                os.makedirs(folder_tanggal, exist_ok=True)
-
-                self.log(f"   → Mengambil gambar untuk {current_date.strftime('%d/%m/%Y')}")
-                temp_file = self.ambil_gambar_tanggal_sid(driver, sid, current_date)
-                if temp_file and os.path.exists(temp_file):
-                    final_name = os.path.join(folder_tanggal, f"MRTG_{sid}.png")
-                    os.replace(temp_file, final_name)
-                    self.log(f"     ✅ Tersimpan: {final_name}")
-                    sukses += 1
-                else:
-                    self.log(f"     ❌ Gagal untuk tanggal {current_date.strftime('%d/%m/%Y')}")
-
-                current_date += timedelta(days=1)
-                time.sleep(1)
-
-            total_sukses += sukses
-            self.log(f"✅ SID {sid}: {sukses}/{total_hari} gambar berhasil")
-            self.log("   → Jeda 3 detik sebelum SID berikutnya...")
-            time.sleep(3)
-        return total_sukses
-
-    # ========== GRAPH TITLE MODE FUNCTIONS ==========
-    def ambil_gambar_tanggal_graphtitle(self, driver, graph_title, tanggal):
+    def ambil_gambar_logic(self, target, tanggal):
         tgl_str = tanggal.strftime("%d/%m/%Y")
-        waktu_awal = f"{tgl_str} 00:00"
-        waktu_akhir = f"{tgl_str} 23:55"
-
-        for percobaan in range(1, MAX_RETRIES + 1):
-            if not self.is_running: break
-            try:
-                driver.execute_script(f"document.getElementById('startdate').value = '{waktu_awal}';")
-                driver.execute_script(f"document.getElementById('enddate').value = '{waktu_akhir}';")
-                driver.execute_script("document.getElementById('startdate').dispatchEvent(new Event('change'));")
-                driver.execute_script("document.getElementById('enddate').dispatchEvent(new Event('change'));")
-                time.sleep(0.5)
-
-                driver.execute_script("document.getElementById('graphfilter').click();")
-                time.sleep(5)
-
-                driver.execute_script("window.scrollTo(0, document.body.scrollHeight);")
-                time.sleep(1)
-
-                gambar = None
-                for _ in range(20):
-                    try:
-                        elems = driver.find_elements(By.XPATH, "//img[contains(@src, 'graph.php')]")
-                        if elems and elems[0].is_displayed():
-                            gambar = elems[0]
-                            break
-                    except:
-                        pass
-                    time.sleep(0.5)
-
-                if not gambar:
-                    raise Exception("Gambar tidak ditemukan")
-
-                driver.execute_script("arguments[0].scrollIntoView({block: 'center', behavior: 'smooth'});", gambar)
-                time.sleep(1)
-
-                temp_file = f"temp_{tanggal.strftime('%Y%m%d')}.png"
-                gambar.screenshot(temp_file)
-
-                if self.is_graph_not_available(temp_file):
-                    os.remove(temp_file)
-                    raise Exception("Graph not available")
-
-                return temp_file
-
-            except Exception as e:
-                self.log(f"     [Percobaan {percobaan}] Gagal: {str(e)[:100]}")
-                if percobaan < MAX_RETRIES:
-                    self.log("     → Refresh halaman dan buka ulang modal...")
-                    driver.refresh()
-                    time.sleep(5)
-                    for _ in range(20):
-                        try:
-                            driver.find_element(By.NAME, "graphtitle")
-                            break
-                        except:
-                            time.sleep(0.5)
-                    try:
-                        input_title = driver.find_element(By.NAME, "graphtitle")
-                        input_title.clear()
-                        input_title.send_keys(graph_title)
-                        time.sleep(0.5)
-                        input_title.send_keys(Keys.ENTER)
-                        time.sleep(5)
-                        tombol_grafik = driver.find_element(By.CSS_SELECTOR, "a.btn-graph")
-                        driver.execute_script("arguments[0].scrollIntoView({block: 'center'});", tombol_grafik)
-                        time.sleep(0.5)
-                        tombol_grafik.click()
-                        for _ in range(30):
-                            try:
-                                driver.find_element(By.ID, "graphfilter")
-                                break
-                            except:
-                                time.sleep(0.5)
-                        time.sleep(2)
-                    except Exception as ex:
-                        self.log(f"     → Gagal reopen modal: {ex}")
-                else:
-                    return None
-        return None
-
-    def proses_graph_title(self, driver, graph_title, folder_output):
+        w_start, w_end = f"{tgl_str} 00:00", f"{tgl_str} 23:55"
+        temp_file = f"temp_{target}_{tanggal.strftime('%Y%m%d')}.png"
         try:
-            input_title = driver.find_element(By.NAME, "graphtitle")
-            input_title.clear()
-            input_title.send_keys(graph_title)
-            time.sleep(0.5)
-            input_title.send_keys(Keys.ENTER)
-            self.log(f"   → Tekan Enter untuk graph title: {graph_title}")
-            time.sleep(5)
-
-            tombol_grafik = driver.find_element(By.CSS_SELECTOR, "a.btn-graph")
-            driver.execute_script("arguments[0].scrollIntoView({block: 'center'});", tombol_grafik)
-            time.sleep(0.5)
-            tombol_grafik.click()
-            self.log("   → Klik tombol grafik, menunggu modal...")
-
-            for _ in range(30):
-                try:
-                    driver.find_element(By.ID, "graphfilter")
-                    break
-                except:
-                    time.sleep(0.5)
-            self.log("   → Modal terbuka")
-
-            sukses = 0
-            current = self.start_date
-            while current <= self.end_date:
-                if not self.is_running: break
-                tgl_str = current.strftime("%Y%m%d")
-                folder_tgl = os.path.join(folder_output, tgl_str)
-                os.makedirs(folder_tgl, exist_ok=True)
-
-                self.log(f"   → Mengambil gambar untuk {current.strftime('%d/%m/%Y')}")
-                temp_file = self.ambil_gambar_tanggal_graphtitle(driver, graph_title, current)
-                if temp_file and os.path.exists(temp_file):
-                    final_name = os.path.join(folder_tgl, f"MRTG_{graph_title}_{current.strftime('%Y%m%d')}.png")
-                    os.replace(temp_file, final_name)
-                    self.log(f"     ✅ Berhasil")
-                    sukses += 1
-                else:
-                    self.log(f"     ❌ Gagal")
-
-                current += timedelta(days=1)
+            f_sel = By.CSS_SELECTOR if self.mode == "graphtitle" else By.XPATH
+            f_val = "button#graphfilter" if self.mode == "graphtitle" else "//button[contains(normalize-space(), 'Filter')]"
+            WebDriverWait(self.driver, 15).until(EC.presence_of_element_located((f_sel, f_val)))
+            if self.mode == "sid":
+                inputs = self.driver.find_elements(By.XPATH, "//button[contains(normalize-space(), 'Filter')]/preceding::input[not(@type='hidden')]")
+                self.driver.execute_script("arguments[0].value = arguments[1];", inputs[-2], w_start)
+                self.driver.execute_script("arguments[0].value = arguments[1];", inputs[-1], w_end)
+                self.driver.execute_script("arguments[0].dispatchEvent(new Event('change'));", inputs[-2])
+                self.driver.execute_script("arguments[0].dispatchEvent(new Event('change'));", inputs[-1])
+                btn_f = self.driver.find_element(By.XPATH, f_val)
+                self.driver.execute_script("arguments[0].click();", btn_f)
+            else:
+                self.driver.execute_script(f"document.getElementById('startdate').value = '{w_start}';")
+                self.driver.execute_script(f"document.getElementById('enddate').value = '{w_end}';")
+                self.driver.execute_script("document.getElementById('startdate').dispatchEvent(new Event('change'));")
+                self.driver.execute_script("document.getElementById('enddate').dispatchEvent(new Event('change'));")
+                self.driver.execute_script("document.getElementById('graphfilter').click();")
+            time.sleep(3); self.wait_for_loading_and_kill_it(); time.sleep(2)
+            img_el = None
+            for _ in range(15):
+                imgs = self.driver.find_elements(By.XPATH, "//img[contains(@src, 'graph.php')]")
+                for img in imgs:
+                    if int(img.get_attribute("naturalWidth") or 0) > 400:
+                        img_el = img; break
+                if img_el: break
                 time.sleep(1)
-
-            try:
-                close_btn = driver.find_element(By.ID, "modalclose")
-                close_btn.click()
-                self.log("   → Modal ditutup")
-            except:
-                driver.find_element(By.TAG_NAME, 'body').send_keys(Keys.ESCAPE)
-            time.sleep(2)
-            return sukses
-
+            if not img_el: return None
+            self.isolate_image_for_capture(img_el)
+            time.sleep(1.5); img_el.screenshot(temp_file); self.restore_ui_after_capture(img_el)
+            return temp_file if os.path.exists(temp_file) else None
         except Exception as e:
-            self.log(f"   → ERROR: {e}")
-            return 0
-
-    def run_mode_graphtitle(self, driver, items, cfg):
-        total_sukses = 0
-        total_hari = (self.end_date - self.start_date).days + 1
-
-        for idx, title in enumerate(items, 1):
-            if not self.is_running: break
-            self.log(f"\n{'='*50}")
-            self.log(f"📁 PROSES GRAPH TITLE {idx}/{len(items)}: {title}")
-            self.log(f"{'='*50}")
-
-            sukses = self.proses_graph_title(driver, title, cfg["output"])
-            total_sukses += sukses
-            self.log(f"✅ Graph title {title}: {sukses}/{total_hari} gambar berhasil")
-
-            if idx < len(items) and self.is_running:
-                self.log("   → Refresh halaman untuk mempersiapkan title berikutnya...")
-                driver.refresh()
-                time.sleep(5)
-                for _ in range(20):
-                    try:
-                        driver.find_element(By.NAME, "graphtitle")
-                        break
-                    except:
-                        time.sleep(0.5)
-                self.log("   → Halaman siap")
-
-            time.sleep(2)
-
-        return total_sukses
+            self.log(f"   ❌ Error Ambil Gambar: {str(e)[:80]}", "error")
+            self.handle_alerts()
+        return None
 
     def run(self):
         try:
-            self._run()
-        except Exception as e:
-            import traceback
-            self.log(f"\n[CRITICAL THREAD ERROR] {e}\n{traceback.format_exc()}")
-            self.signals.finished.emit()
-
-    def _run(self):
-        self.log("=" * 60)
-        self.log("    AUTOMATED MRTG SCREENSHOT - TELKOMCARE")
-        self.log("=" * 60)
-
-        cfg = CONFIG[self.mode]
-        self.log(f"\n→ Mode: {cfg['label']}")
-        self.log(f"→ File: {cfg['file']}")
-
-        if not os.path.exists(cfg["file"]):
-            self.log(f"\n[ERROR] File '{cfg['file']}' tidak ditemukan!")
-            self.signals.finished.emit()
-            return
-
-        items = self.baca_item_dari_file(cfg["file"], cfg["prefix"])
-        if not items:
-            self.log(f"Tidak ada {cfg['label']} ditemukan di file {cfg['file']}")
-            self.signals.finished.emit()
-            return
-        self.log(f"→ Ditemukan {len(items)} {cfg['label']} unik")
-
-        driver = self.setup_browser()
-        if not driver:
-            self.signals.finished.emit()
-            return
-
-        driver.get("http://telkomcare.telkom.co.id/mrtgnetcare2/")
-
-        self.log("\n" + "=" * 60)
-        self.log("⚠️  SILAKAN LOGIN MANUAL DI BROWSER YANG TERBUKA")
-        self.log("⚠️  SETELAH BERHASIL LOGIN, KLIK TOMBOL 'Lanjutkan Scraping'")
-        self.log("=" * 60)
-        
-        self.signals.login_ready.emit()
-        
-        # Pause thread sampai event diset (via GUI button)
-        self.login_event.wait()
-        
-        if not self.is_running:
-            driver.quit()
-            return
-
-        self.log("\n   → Melakukan navigasi otomatis ke halaman grafik...")
-        try:
-            menu_graph = WebDriverWait(driver, 10).until(
-                EC.element_to_be_clickable((By.XPATH, "//a[@data-id='2']"))
-            )
-            menu_graph.click()
+            self.driver = webdriver.Chrome(service=Service(ChromeDriverManager().install()), options=webdriver.ChromeOptions())
+            self.driver.get(self.cfg["url"])
+            self.log("\n" + "="*50); self.log("⚠️  SILAKAN LOGIN MANUAL DI BROWSER..."); 
+            self.log("✅ Klik tombol 'Lanjutkan' jika sudah login!"); self.log("="*50)
+            self.signals.login_ready.emit()
+            self.login_event.wait()
+            if not self.is_running:
+                if self.driver: self.driver.quit()
+                self.signals.finished.emit(); return
+            self.hide_browser_gaib()
+            WebDriverWait(self.driver, 10).until(EC.element_to_be_clickable((By.XPATH, "//a[@data-id='2']"))).click()
             time.sleep(1.5)
-
-            if self.mode == "sid":
-                submenu = WebDriverWait(driver, 10).until(
-                    EC.element_to_be_clickable((By.XPATH, "//a[contains(@href, '/mrtgnetcare2/graph/monitoring')]"))
-                )
-                submenu.click()
-            else:
-                submenu = WebDriverWait(driver, 10).until(
-                    EC.element_to_be_clickable((By.XPATH, "//a[@data-id='1' and contains(@href, '/mrtgnetcare2/graph')]"))
-                )
-                submenu.click()
-            
-            self.log("   ✅ Navigasi berhasil")
-            time.sleep(3)
+            target_nav = "//a[contains(@href, '/mrtgnetcare2/graph/monitoring')]" if self.mode == "sid" else "//a[@data-id='1' and contains(@href, '/mrtgnetcare2/graph')]"
+            WebDriverWait(self.driver, 10).until(EC.element_to_be_clickable((By.XPATH, target_nav))).click()
+            time.sleep(2)
+            items = []
+            if os.path.exists(self.cfg["file"]):
+                with open(self.cfg["file"], "r", encoding="utf-8") as f:
+                    for line in f:
+                        if line.startswith(self.cfg["prefix"]):
+                            items.append(line.replace(self.cfg["prefix"], "").strip())
+            items = list(dict.fromkeys(items))
+            total_sukses = 0
+            for idx, item in enumerate(items, 1):
+                if not self.is_running: break
+                self.log(f"\n=== PROSES {idx}/{len(items)}: {item} ===")
+                if not self.ganti_target_with_retry(item):
+                    self.log(f"   ❌ Gagal memproses {item}", "error")
+                    continue
+                current = self.start_date
+                while current <= self.end_date:
+                    if not self.is_running: break
+                    tgl_fmt = current.strftime('%d/%m/%Y')
+                    temp = self.ambil_gambar_logic(item, current)
+                    if temp:
+                        folder = os.path.join(self.cfg["output"], current.strftime("%Y%m%d"))
+                        os.makedirs(folder, exist_ok=True)
+                        fname = f"MRTG_{item}.png" if self.mode == "sid" else f"MRTG_{item}_{current.strftime('%Y%m%d')}.png"
+                        os.replace(temp, os.path.join(folder, fname))
+                        self.log(f"   ✅ Berhasil [{tgl_fmt}]")
+                        total_sukses += 1
+                    else:
+                        self.log(f"   ❌ Gagal [{tgl_fmt}]", "error")
+                    current += timedelta(days=1)
+            self.log("\n" + "="*50); self.log(f"🎉 SELESAI! Total Berhasil: {total_sukses}"); self.log("="*50)
         except Exception as e:
-            self.log(f"   ❌ Gagal navigasi otomatis (lanjut memproses): {str(e)[:80]}")
-
-        os.makedirs(cfg["output"], exist_ok=True)
-
-        if self.mode == "sid":
-            total_sukses = self.run_mode_sid(driver, items, cfg)
-        else:
-            total_sukses = self.run_mode_graphtitle(driver, items, cfg)
-
-        self.log("\n" + "=" * 60)
-        self.log(f"🎉 SELESAI! Total gambar berhasil: {total_sukses}")
-        self.log(f"📁 Folder output: {cfg['output']}")
-        self.log("=" * 60)
-        
-        driver.quit()
-        self.signals.finished.emit()
-
+            self.log(f"\n[CRITICAL ERROR] {e}", "error")
+        finally:
+            if self.driver: self.driver.quit()
+            self.signals.finished.emit()
 
 class MainWindow(QMainWindow):
     def __init__(self):
         super().__init__()
-        self.setWindowTitle("MRTG TelkomCare Scraper")
-        self.setWindowIcon(self.style().standardIcon(QStyle.SP_ComputerIcon))
+        self.setWindowTitle("MRTG TelkomCare Scraper - Pro Version")
         self.resize(750, 600)
-        self.is_dark_mode = True # Default ke Dark Mode
-        
-        # Main Layout
-        central_widget = QWidget()
-        self.setCentralWidget(central_widget)
+        self.is_dark_mode = True
+        central_widget = QWidget(); self.setCentralWidget(central_widget)
         main_layout = QVBoxLayout(central_widget)
-
-        # Header Theme Toggle
-        theme_layout = QHBoxLayout()
-        theme_layout.addStretch()
-        self.btn_theme = QPushButton("☀️ Ganti ke Light Mode")
-        self.btn_theme.setFixedWidth(160)
-        self.btn_theme.clicked.connect(self.toggle_theme)
-        theme_layout.addWidget(self.btn_theme)
-        main_layout.addLayout(theme_layout)
-
-        # Mode Selection
         mode_group = QGroupBox("Mode Pencarian")
-        mode_layout = QHBoxLayout()
-        self.radio_sid = QRadioButton("SID (SID-MRTG.txt)")
-        self.radio_graph = QRadioButton("Graph Title (GRAPH-TITLE-MRTG.txt)")
-        self.radio_sid.setChecked(True)
-        mode_layout.addWidget(self.radio_sid)
-        mode_layout.addWidget(self.radio_graph)
-        mode_group.setLayout(mode_layout)
-        main_layout.addWidget(mode_group)
-
-        # Date Pickers
+        mode_layout = QHBoxLayout(); self.radio_sid = QRadioButton("SID Mode"); self.radio_graph = QRadioButton("Graph Title Mode")
+        self.radio_sid.setChecked(True); mode_layout.addWidget(self.radio_sid); mode_layout.addWidget(self.radio_graph)
+        mode_group.setLayout(mode_layout); main_layout.addWidget(mode_group)
         date_group = QGroupBox("Rentang Tanggal")
-        date_layout = QHBoxLayout()
-        
-        self.date_start = QDateEdit()
-        self.date_start.setDisplayFormat("dd/MM/yyyy")
-        self.date_start.setCalendarPopup(True)
-        self.date_start.setDate(QDate.currentDate())
-        
-        self.date_end = QDateEdit()
-        self.date_end.setDisplayFormat("dd/MM/yyyy")
-        self.date_end.setCalendarPopup(True)
-        self.date_end.setDate(QDate.currentDate())
-
-        date_layout.addWidget(QLabel("Mulai:"))
-        date_layout.addWidget(self.date_start)
-        date_layout.addWidget(QLabel("Akhir:"))
-        date_layout.addWidget(self.date_end)
-        date_group.setLayout(date_layout)
-        main_layout.addWidget(date_group)
-
-        # Log Window
-        self.log_viewer = QTextEdit()
-        self.log_viewer.setReadOnly(True)
-        self.log_viewer.setFont(QFont("Consolas", 10))
-        main_layout.addWidget(QLabel("Proses Log:"))
-        main_layout.addWidget(self.log_viewer)
-
-        # Control Buttons
+        date_layout = QHBoxLayout(); self.date_start = QDateEdit(QDate.currentDate()); self.date_start.setCalendarPopup(True)
+        self.date_end = QDateEdit(QDate.currentDate()); self.date_end.setCalendarPopup(True)
+        date_layout.addWidget(QLabel("Mulai:")); date_layout.addWidget(self.date_start); date_layout.addWidget(QLabel("Akhir:")); date_layout.addWidget(self.date_end)
+        date_group.setLayout(date_layout); main_layout.addWidget(date_group)
+        self.log_viewer = QTextEdit(); self.log_viewer.setReadOnly(True); self.log_viewer.setFont(QFont("Consolas", 10))
+        main_layout.addWidget(QLabel("Proses Log:")); main_layout.addWidget(self.log_viewer)
         btn_layout = QHBoxLayout()
-        self.btn_start = QPushButton("▶ Mulai Scraping")
-        self.btn_start.setMinimumHeight(40)
-        self.btn_start.setStyleSheet("font-weight: bold;")
-        self.btn_start.clicked.connect(self.start_scraping)
-        
-        self.btn_continue = QPushButton("✅ Lanjutkan (Sudah Login)")
-        self.btn_continue.setMinimumHeight(40)
-        self.btn_continue.setStyleSheet("font-weight: bold; background-color: #2e7d32; color: white;")
-        self.btn_continue.setEnabled(False)
-        self.btn_continue.clicked.connect(self.continue_scraping)
-
-        btn_layout.addWidget(self.btn_start)
-        btn_layout.addWidget(self.btn_continue)
-        main_layout.addLayout(btn_layout)
-
-        self.apply_theme()
-        self.worker = None
+        self.btn_start = QPushButton("▶ Mulai Scraping"); self.btn_start.setMinimumHeight(45); self.btn_start.clicked.connect(self.start_scraping)
+        self.btn_continue = QPushButton("✅ Lanjutkan"); self.btn_continue.setMinimumHeight(45); self.btn_continue.setEnabled(False); self.btn_continue.clicked.connect(self.continue_scraping)
+        self.btn_stop = QPushButton("🛑 STOP"); self.btn_stop.setMinimumHeight(45); self.btn_stop.setEnabled(False); self.btn_stop.clicked.connect(self.stop_scraping)
+        btn_layout.addWidget(self.btn_start); btn_layout.addWidget(self.btn_continue); btn_layout.addWidget(self.btn_stop); main_layout.addLayout(btn_layout)
+        self.apply_theme(); self.update_button_styles(); self.worker = None
 
     def apply_theme(self):
         palette = QPalette()
-        if self.is_dark_mode:
-            palette.setColor(QPalette.Window, QColor(30, 30, 46))
-            palette.setColor(QPalette.WindowText, QColor(205, 214, 244))
-            palette.setColor(QPalette.Base, QColor(17, 17, 27))
-            palette.setColor(QPalette.AlternateBase, QColor(30, 30, 46))
-            palette.setColor(QPalette.ToolTipBase, QColor(30, 30, 46))
-            palette.setColor(QPalette.ToolTipText, QColor(205, 214, 244))
-            palette.setColor(QPalette.Text, QColor(166, 227, 161))
-            palette.setColor(QPalette.Button, QColor(49, 50, 68))
-            palette.setColor(QPalette.ButtonText, QColor(205, 214, 244))
-            palette.setColor(QPalette.BrightText, Qt.red)
-            palette.setColor(QPalette.Link, QColor(137, 180, 250))
-            palette.setColor(QPalette.Highlight, QColor(137, 180, 250))
-            palette.setColor(QPalette.HighlightedText, Qt.black)
-            QApplication.instance().setPalette(palette)
-            self.setStyleSheet("") # Clear custom QSS so geometry stays native
-            self.btn_theme.setText("☀️ Ganti ke Light Mode")
-            
-        else:
-            palette.setColor(QPalette.Window, QColor(248, 249, 250))
-            palette.setColor(QPalette.WindowText, QColor(33, 37, 41))
-            palette.setColor(QPalette.Base, QColor(255, 255, 255))
-            palette.setColor(QPalette.AlternateBase, QColor(248, 249, 250))
-            palette.setColor(QPalette.ToolTipBase, QColor(255, 255, 255))
-            palette.setColor(QPalette.ToolTipText, QColor(33, 37, 41))
-            palette.setColor(QPalette.Text, QColor(25, 135, 84))
-            palette.setColor(QPalette.Button, QColor(233, 236, 239))
-            palette.setColor(QPalette.ButtonText, QColor(33, 37, 41))
-            palette.setColor(QPalette.BrightText, Qt.red)
-            palette.setColor(QPalette.Link, QColor(13, 110, 253))
-            palette.setColor(QPalette.Highlight, QColor(13, 110, 253))
-            palette.setColor(QPalette.HighlightedText, Qt.white)
-            QApplication.instance().setPalette(palette)
-            self.setStyleSheet("")
-            self.btn_theme.setText("🌙 Ganti ke Dark Mode")
-        
-        # Override btn_continue specifically using targeted QSS so it doesn't affect global widgets
-        base_btn_qss = "QPushButton { font-weight: bold; padding: 6px; border-radius: 4px; }"
-        if not self.btn_continue.isEnabled():
-            self.btn_continue.setStyleSheet(base_btn_qss + "QPushButton { background-color: #6c757d; color: white; border: 1px solid #5c636a; }")
-        else:
-            self.btn_continue.setStyleSheet(base_btn_qss + "QPushButton { background-color: #198754; color: white; border: 1px solid #146c43; }")
-        
-        self.btn_start.setStyleSheet(base_btn_qss)
+        palette.setColor(QPalette.Window, QColor(30, 30, 46)); palette.setColor(QPalette.WindowText, QColor(205, 214, 244))
+        palette.setColor(QPalette.Base, QColor(17, 17, 27)); palette.setColor(QPalette.Text, QColor(166, 227, 161))
+        palette.setColor(QPalette.Button, QColor(49, 50, 68)); palette.setColor(QPalette.ButtonText, QColor(205, 214, 244))
+        QApplication.instance().setPalette(palette)
+        self.log_viewer.setStyleSheet("background-color: #11111b; color: #a6e22e; border: 1px solid #313244;")
 
-    def toggle_theme(self):
-        self.is_dark_mode = not self.is_dark_mode
-        self.apply_theme()
+    def update_button_styles(self):
+        def get_style(color_hex, enabled):
+            if not enabled: return "background-color: #45475a; color: #9399b2; border-radius: 5px; font-weight: bold;"
+            return f"background-color: {color_hex}; color: white; border-radius: 5px; font-weight: bold;"
+        
+        self.btn_start.setStyleSheet(get_style("#2ecc71", self.btn_start.isEnabled()))
+        self.btn_continue.setStyleSheet(get_style("#2ecc71", self.btn_continue.isEnabled()))
+        self.btn_stop.setStyleSheet(get_style("#e74c3c", self.btn_stop.isEnabled()))
 
     def append_log(self, text):
-        self.log_viewer.append(text)
-        self.log_viewer.moveCursor(QTextCursor.End)
+        self.log_viewer.append(text); self.log_viewer.moveCursor(QTextCursor.End)
 
-    def enable_continue_button(self):
-        self.btn_continue.setEnabled(True)
-        self.btn_continue.setStyleSheet("font-weight: bold; background-color: #198754; color: white;")
-        self.btn_start.setEnabled(False)
+    def enable_continue(self):
+        self.btn_continue.setEnabled(True); self.update_button_styles()
 
     def start_scraping(self):
-        if self.worker and self.worker.isRunning():
-            QMessageBox.warning(self, "Warning", "Proses sedang berjalan!")
-            return
-
-        self.log_viewer.clear()
-        
-        mode = "sid" if self.radio_sid.isChecked() else "graphtitle"
-        start_date = self.date_start.date().toPython()
-        end_date = self.date_end.date().toPython()
-
-        if start_date > end_date:
-            QMessageBox.critical(self, "Error", "Tanggal mulai tidak boleh lebih besar dari tanggal akhir!")
-            return
-
-        self.btn_start.setEnabled(False)
-        
-        self.worker = ScraperWorker(mode, start_date, end_date)
-        self.worker.signals.log_msg.connect(self.append_log)
-        self.worker.signals.login_ready.connect(self.enable_continue_button)
-        self.worker.signals.finished.connect(self.on_scraping_finished)
-        self.worker.start()
+        self.log_viewer.clear(); self.btn_start.setEnabled(False); self.btn_stop.setEnabled(True); self.update_button_styles()
+        self.worker = ScraperWorker("sid" if self.radio_sid.isChecked() else "graphtitle", self.date_start.date().toPython(), self.date_end.date().toPython())
+        self.worker.signals.log_msg.connect(self.append_log); self.worker.signals.login_ready.connect(self.enable_continue)
+        self.worker.signals.finished.connect(self.on_finished); self.worker.start()
 
     def continue_scraping(self):
-        if self.worker:
-            self.btn_continue.setEnabled(False)
-            self.btn_continue.setStyleSheet("font-weight: bold; background-color: #6c757d; color: white;")
-            self.append_log("\n[INFO] Melanjutkan proses scraping...")
-            self.worker.login_event.set()
+        self.btn_continue.setEnabled(False); self.update_button_styles()
+        if self.worker: self.worker.login_event.set()
 
-    def on_scraping_finished(self):
-        self.btn_start.setEnabled(True)
-        self.btn_continue.setEnabled(False)
-        self.btn_continue.setStyleSheet("font-weight: bold; background-color: #6c757d; color: white;")
-        if self.worker:
-            self.worker.is_running = False
+    def stop_scraping(self):
+        if self.worker: self.worker.stop(); self.append_log("\n⚠️  MENGHENTIKAN PROSES..."); self.btn_stop.setEnabled(False); self.update_button_styles()
 
-    def closeEvent(self, event):
-        if self.worker and self.worker.isRunning():
-            self.worker.is_running = False
-            self.worker.login_event.set() # Release wait if paused
-            self.worker.quit()
-            self.worker.wait(1000)
-        event.accept()
+    def on_finished(self):
+        self.btn_start.setEnabled(True); self.btn_stop.setEnabled(False); self.btn_continue.setEnabled(False); self.update_button_styles()
 
 if __name__ == "__main__":
-    app = QApplication(sys.argv)
-    app.setStyle("Fusion")
-    window = MainWindow()
-    window.show()
-    sys.exit(app.exec())
+    app = QApplication(sys.argv); app.setStyle("Fusion"); window = MainWindow(); window.show(); sys.exit(app.exec())
