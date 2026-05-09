@@ -1,146 +1,77 @@
-# 📊 MRTG Automation Tool for TelkomCare
+# 🚀 MRTG TelkomCare Screenshot Bot (PRO VERSION)
 
-**Aplikasi Desktop (GUI) & Terminal (CLI) untuk otomatisasi pengunduhan grafik MRTG dari TelkomCare berdasarkan SID atau Graph Title. Dilengkapi dengan validasi gambar (YCbCr), auto-navigasi, dan retry otomatis.**
-
-[![Python](https://img.shields.io/badge/Python-3.8%2B-blue)](https://python.org)
-[![Selenium](https://img.shields.io/badge/Selenium-4.x-green)](https://selenium.dev)
-[![PySide6](https://img.shields.io/badge/PySide6-Qt-yellow)](https://doc.qt.io/qtforpython/)
+Bot otomatisasi super presisi untuk mengambil screenshot grafik MRTG dari portal TelkomCare. Dirancang untuk keandalan tinggi, batch processing multi-tanggal, dan hasil gambar pixel-perfect.
 
 ---
 
-## 📌 Fitur Utama
+## ✨ Fitur Unggulan
 
-- 💻 **Antarmuka Desktop (GUI)** – Tampilan GUI modern menggunakan PySide6 dengan fitur *Live Log*, Kalender (*Date Picker*), dan mode Dark/Light.
-- ⚙️ **Dua Mode Eksekusi** – Bisa dieksekusi secara interaktif melalui **GUI** atau secara tradisional melalui **CLI** (*Command Line*).
-- 🔄 **Unified Scraping Engine** – Pencarian berdasarkan **SID** maupun **Graph Title** kini tergabung dalam satu aplikasi.
-- 🎨 **Validasi Gambar YCbCr** – Logika tingkat lanjut untuk membedakan gambar grafik yang kosong (0 bps) dengan gambar *Error / No Graph* berdasarkan analisis warna, mencegah data yang sah terhapus otomatis.
-- 🧭 **Navigasi Sidebar Otomatis** – Setelah *login manual* sukses, bot akan otomatis mencarikan menu "Graph" dan masuk ke "Monitor Graph" atau "List Graph".
-- ✅ **Retry otomatis** – Fitur otomatis memuat ulang halaman (*refresh*) jika data tabel/grafik gagal dimuat (*Stale Element*).
-- 📂 **Group by Tanggal** – Output diorganisir rapi ke folder `YYYYMMDD/MRTG_<ID>.png`.
-
----
-
-## 🛠️ Prasyarat
-
-| Software | Keterangan |
-|----------|-------------|
-| **Python 3.8+** | [Download](https://www.python.org/downloads/) |
-| **Google Chrome** | Browser terbaru |
-| **Tesseract OCR (Opsional)**| [Download](https://github.com/UB-Mannheim/tesseract/wiki) – untuk fallback validasi teks jika gambar dirasa blur. |
-| **Internet** | Akses ke `telkomcare.telkom.co.id` |
+- **🎯 Nuclear Isolation Protocol**: Mengisolasi elemen grafik ke koordinat (0,0) secara total sebelum screenshot. Menjamin hasil **Pixel-Perfect** dan bebas dari gangguan sidebar/navbar yang "mencong".
+- **👻 Gaib Mode (Hidden Browser)**: Browser berjalan secara otomatis di latar belakang (background) setelah proses login manual, sehingga tidak mengganggu aktivitas kerja Anda di layar.
+- **🔄 Smart Auto-Recovery**: Dilengkapi logika retry pintar untuk menangani *Stale Element Reference* dan *DataTables JSON Error* secara otomatis.
+- **🖥️ Dual Mode Interface**: 
+  - **CLI Mode**: Super cepat dan ringan untuk power users.
+  - **GUI Mode**: Berbasis PySide6 yang modern dengan tombol **STOP** darurat dan indikator warna yang informatif.
+- **📅 Multi-Date Batching**: Masukkan rentang tanggal, dan bot akan mengambil semua data secara urut tanpa intervensi manual.
+- **📑 Detailed Audit Logging**: Semua aktivitas (Sukses, Gagal, Retry) dicatat secara mendetail di `mrtg_process.log`.
 
 ---
 
-## 📦 Cara Mendapatkan Aplikasi (Instalasi)
+## 🛠️ Persiapan & Instalasi
 
-### Opsi A: Menggunakan `.exe` Standalone (Sangat Disarankan)
-Cara ini paling mudah karena kamu tidak perlu menginstal Python atau alat tambahan apapun.
-1. Buka halaman **Releases** di sebelah kanan atas repository GitHub ini.
-2. Download file **`mrtg_telkomcare_gui.exe`**.
-3. Letakkan file tersebut di dalam satu folder kosong (misalnya di Desktop).
-4. Buat file `SID-MRTG.txt` dan `GRAPH-TITLE-MRTG.txt` di folder yang sama.
-5. Klik 2x file `.exe` tersebut, aplikasi siap digunakan!
-
-### Opsi B: Menggunakan Script Python (Developer Mode)
-Jika kamu ingin memodifikasi kode sumber atau menjalankan script secara native:
-1. **Clone repository** (atau download zip)
-   ```bash
-   git clone https://github.com/username/mrtg-automation.git
-   cd mrtg-automation
-   ```
-
-2. **Buat virtual environment (opsional)**
-   ```bash
-   python -m venv venv
-   venv\Scripts\activate      # Windows
-   ```
-
-3. **Install library Python**
-   ```bash
-   pip install selenium pillow pytesseract PySide6
-   ```
+1.  **Install Python**: Pastikan Python 3.10+ sudah terinstall.
+2.  **Install Dependencies**:
+    ```bash
+    pip install selenium webdriver-manager PySide6 rich tqdm Pillow
+    ```
+3.  **Setup Tesseract (Opsional)**: Pastikan Tesseract OCR terinstall jika ingin menggunakan fitur validasi teks gambar.
+4.  **Input Data**:
+    - Isi file `SID-MRTG.txt` dengan format `SID : <nomor_sid>`
+    - Isi file `GRAPH-TITLE-MRTG.txt` dengan format `Graph-title : <judul_grafik>`
 
 ---
 
-## 📁 Persiapan File Input
+## 🚀 Cara Menjalankan
 
-Buat dua file teks di folder yang sama dengan script:
-
-### 1. Untuk mode SID (`SID-MRTG.txt`)
-```text
-SID : 4700001-0021497479
-SID : 4700001-0020265222
-SID : 2007544330
-```
-
-### 2. Untuk mode Graph Title (`GRAPH-TITLE-MRTG.txt`)
-```text
-Graph-title : 3598
-Graph-title : 3784
-```
-
----
-
-## 🚀 Cara Penggunaan
-
-### Opsi 1: Mode GUI (Sangat Direkomendasikan)
-Menjalankan aplikasi versi Desktop yang ramah pengguna.
-```bash
-python mrtg_telkomcare_gui.py
-```
-**Alur:**
-1. Pilih **Mode Pencarian** (SID atau Graph Title).
-2. Atur **Rentang Tanggal** melalui kalender.
-3. Klik tombol **"▶ Mulai Scraping"**. Browser Chrome akan terbuka.
-4. Lakukan **Login Manual** di browser (isi Username, Password, Captcha).
-5. Setelah berhasil login, klik tombol hijau **"✅ Lanjutkan (Sudah Login)"** di aplikasi.
-6. Bot akan berjalan otomatis. Kamu bisa pantau prosesnya secara live di kotak *Proses Log*.
-
-### Opsi 2: Mode CLI (Terminal / Backup)
-Menjalankan script klasik berbasis terminal.
+### Versi CLI (Command Line)
+Sangat cocok untuk pemrosesan cepat.
 ```bash
 python mrtg_telkomcare_cli.py
 ```
-**Alur:**
-1. Script akan menanyakan opsi `1` (SID) atau `2` (Graph Title).
-2. Masukkan tanggal mulai dan akhir dengan format `DD MM YYYY` (contoh: `1 1 2026`).
-3. Lakukan **Login Manual** di Chrome.
-4. Setelah masuk ke halaman depan web, buka terminal lagi lalu tekan **`ENTER`**.
-5. Bot akan otomatis navigasi ke menu grafik dan memulai *scraping*.
 
----
-
-## 📂 Struktur Output
-
-Hasil *screenshot* akan otomatis disimpan dengan struktur hierarki seperti ini (agar mudah dicari):
-
-```
-output_mrtg_sid/                   # Untuk hasil pencarian SID
-├── 20260101/
-│   ├── MRTG_4700001-0021497479.png
-│   ├── MRTG_2007544330.png
-├── 20260102/
-│   └── ...
-
-output_mrtg_graphtitle/            # Untuk hasil pencarian Graph Title
-├── 20260101/
-│   ├── MRTG_3598_20260101.png
-│   └── MRTG_3784_20260101.png
-├── 20260102/
-│   └── ...
+### Versi GUI (Desktop App)
+Sangat cocok untuk penggunaan harian yang praktis.
+```bash
+python mrtg_telkomcare_gui.py
 ```
 
 ---
 
-## 🐛 Troubleshooting
-
-| Masalah | Solusi |
-|---------|--------|
-| **GUI Freeze / Not Responding** | Pastikan kamu menjalankan `mrtg_telkomcare_gui.py`. (Script ini sudah mendukung multithreading sehingga dipastikan aman dari freeze). |
-| **Gambar kosong/0 bps terhapus** | Algoritma `YCbCr` terbaru sudah mendeteksi perbedaan *blank error* vs *data nol*. Namun, jika server TelkomCare down dan mengembalikan gambar *pure grayscale*, gambar akan tetap dibuang. |
-| **Gagal Navigasi Sidebar** | Bot gagal ngeklik menu "Graph". Biasanya karena koneksi internet lambat setelah login. Bot akan tetap melanjutkan eksekusi jika gagal, tapi kamu harus menavigasinya secara manual jika ini terjadi. |
-| **TesseractNotFoundError** | Cek kembali *path* Tesseract di file `mrtg_telkomcare_gui.py` baris instalasi (`pytesseract.tesseract_cmd`). |
+## 📝 Alur Kerja Bot
+1.  **Login Manual**: Browser akan terbuka, silakan lakukan login manual (input CAPTCHA jika ada).
+2.  **Lanjutkan**: Klik tombol "Lanjutkan" di GUI atau tekan Enter di CLI.
+3.  **Gaib Mode**: Browser akan menghilang secara otomatis dan bekerja "di bawah tanah".
+4.  **Monitoring**: Pantau progres lewat Progress Bar (CLI) atau Log Viewer (GUI).
+5.  **Output**: Hasil gambar akan tersimpan di folder `output_mrtg_sid` atau `output_mrtg_graphtitle` sesuai tanggal.
 
 ---
 
-*Dikembangkan untuk kemudahan otomasi & monitoring trafik operasional harian! 🚀*
+## 📁 Struktur Folder
+```text
+.
+├── mrtg_telkomcare_cli.py    # Mesin utama (CLI)
+├── mrtg_telkomcare_gui.py    # Aplikasi Desktop (GUI)
+├── SID-MRTG.txt              # Input SID
+├── GRAPH-TITLE-MRTG.txt      # Input Judul Grafik
+├── mrtg_process.log          # File Audit Trail
+└── output_mrtg_xxx/          # Hasil Screenshot (Per Tanggal)
+```
+
+---
+
+## ⚠️ Catatan Penting
+- **Windows DPI Scaling**: Bot ini sudah dioptimalkan untuk Windows dengan scaling di atas 100%.
+- **Stable Connection**: Gunakan koneksi yang stabil karena bot sangat bergantung pada respon AJAX dari server TelkomCare.
+
+---
+**Dibuat dengan ❤️ untuk efisiensi kerja tim Telkom-GMF.**
