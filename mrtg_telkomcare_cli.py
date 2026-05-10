@@ -23,75 +23,40 @@ from selenium.common.exceptions import (
     NoSuchWindowException
 )
 
-import pytesseract
 from PIL import Image
 from rich.console import Console
 from rich.panel import Panel
 from rich.table import Table
 from tqdm import tqdm
-
+from config import CONFIG, MAX_RETRIES, MAX_GRAPH_RETRIES, LOG_FILE, LOG_FORMAT, LOG_DATE_FORMAT, ANSI, WAIT_TIMEOUT, LONG_TIMEOUT, TEMP_FOLDER
 
 # ========== KONFIGURASI UI & LOGGING ==========
 console = Console()
 
-ANSI_CYAN = "\033[1;36m"
-ANSI_GREEN = "\033[1;32m"
-ANSI_RED = "\033[1;31m"
-ANSI_YELLOW = "\033[1;33m"
-ANSI_DIM = "\033[2m"
-ANSI_RESET = "\033[0m"
-
-LOG_FORMAT = "[%(asctime)s] [%(levelname)-8s] %(message)s"
-LOG_DATE_FORMAT = "%Y-%m-%d %H:%M:%S"
+ANSI_CYAN   = ANSI["CYAN"]
+ANSI_GREEN  = ANSI["GREEN"]
+ANSI_RED    = ANSI["RED"]
+ANSI_YELLOW = ANSI["YELLOW"]
+ANSI_DIM    = ANSI["DIM"]
+ANSI_RESET  = ANSI["RESET"]
 
 logging.basicConfig(
     level=logging.INFO,
     format=LOG_FORMAT,
     datefmt=LOG_DATE_FORMAT,
-    handlers=[logging.FileHandler("mrtg_process.log", encoding='utf-8')],
+    handlers=[logging.FileHandler(LOG_FILE, encoding='utf-8')],
 )
 logger = logging.getLogger(__name__)
 
 def log_separator(title=""):
-    with open("mrtg_process.log", "a", encoding="utf-8") as f:
+    with open(LOG_FILE, "a", encoding="utf-8") as f:
         if not title: f.write("\n" + "="*80 + "\n\n")
         else:
             padding = (78 - len(title)) // 2
             f.write("\n" + "="*padding + f" {title} " + "="*padding + "\n")
 
 def log_blank():
-    with open("mrtg_process.log", "a", encoding="utf-8") as f: f.write("\n")
-
-# ========== TESSERACT PATH AUTO-FIND ==========
-def _cari_tesseract():
-    paths = [r'C:\Program Files\Tesseract-OCR\tesseract.exe', r'C:\Program Files (x86)\Tesseract-OCR\tesseract.exe']
-    for p in paths:
-        if os.path.exists(p): return p
-    which = shutil.which('tesseract')
-    return which if which else paths[0]
-
-pytesseract.pytesseract.tesseract_cmd = _cari_tesseract()
-
-# ========== KONFIGURASI ==========
-MAX_RETRIES = 3
-CONFIG = {
-    "sid": {
-        "file": "SID-MRTG.txt",
-        "output": "output_mrtg_sid",
-        "url": "http://telkomcare.telkom.co.id/mrtgnetcare2/graph/monitoring",
-        "input_name": "sid",
-        "prefix": "SID : ",
-        "label": "SID",
-    },
-    "graphtitle": {
-        "file": "GRAPH-TITLE-MRTG.txt",
-        "output": "output_mrtg_graphtitle",
-        "url": "https://telkomcare.telkom.co.id/mrtgnetcare2/graph",
-        "input_name": "graphtitle",
-        "prefix": "Graph-title : ",
-        "label": "Graph Title",
-    },
-}
+    with open(LOG_FILE, "a", encoding="utf-8") as f: f.write("\n")
 
 # ========== HELPER UTILITY ==========
 def baca_item_dari_file(filepath, prefix):
@@ -107,13 +72,49 @@ def baca_item_dari_file(filepath, prefix):
 def check_image_quality(image_path):
     try:
         img = Image.open(image_path)
-        if img.height < 100 or img.width < 100: return False
+        # Cek Resolusi (Gambar error biasanya sangat kecil)
+        if img.height < 100 or img.width < 100:
+            logger.warning(f"   ⚠️  Kualitas Rendah: Resolusi terlalu kecil ({img.width}x{img.height})")
+            return False
+            
         if img.mode != 'RGB': img = img.convert('RGB')
         ycbcr = img.convert("YCbCr")
         extrema = ycbcr.getextrema()
-        if (extrema[1][1] - extrema[1][0]) < 15 and (extrema[2][1] - extrema[2][0]) < 15: return False
+        
+        # Cek kontras (Gambar kosong/blank biasanya punya range warna sangat sempit)
+        if (extrema[1][1] - extrema[1][0]) < 15 and (extrema[2][1] - extrema[2][0]) < 15:
+            logger.warning(f"   ⚠️  Kualitas Rendah: Gambar terdeteksi kosong/blank (low contrast)")
+            return False
+            
         return True
-    except: return False
+    except Exception as e:
+        logger.error(f"   ❌ Gagal memvalidasi gambar: {e}")
+        return False
+
+# ==============================================================================
+# 🔍 FUNGSI DETEKSI GRAPH NOT AVAILABLE (PLACEHOLDER)
+# ==============================================================================
+def is_graph_placeholder(image_path):
+    """
+    Cek apakah gambar adalah 'graph not available' (belum load).
+    Graph yang belum load biasanya berupa gambar solid dengan 1-2 warna saja.
+    """
+    try:
+        img = Image.open(image_path)
+        if img.height < 100 or img.width < 100:
+            return True # Resolusi terlalu kecil = placeholder
+        
+        if img.mode != 'RGB': img = img.convert('RGB')
+        ycbcr = img.convert("YCbCr")
+        extrema = ycbcr.getextrema()
+        
+        # Kalau rentang warna sangat sempit (< 10), berarti placeholder image
+        if (extrema[1][1] - extrema[1][0]) < 10 and (extrema[2][1] - extrema[2][0]) < 10:
+            return True
+            
+        return False
+    except:
+        return False
 
 # ========== MRTG BOT CLASS ==========
 class MRTGBot:
@@ -130,6 +131,57 @@ class MRTGBot:
         options.add_argument("--start-maximized")
         options.add_experimental_option('excludeSwitches', ['enable-logging'])
         self.driver = webdriver.Chrome(service=Service(ChromeDriverManager().install()), options=options)
+
+    # ==============================================================================
+    # 🔄 FUNGSI RECOVERY - REFRESH BROWSER + RE-INPUT
+    # ==============================================================================
+    def recover_graph_not_loaded(self, target, tanggal):
+        """
+        Kalau graph belum load, recovery dengan:
+        Refresh -> Re-input SID -> Re-input tanggal -> Filter
+        """
+        tgl_str = tanggal.strftime("%d/%m/%Y")
+        w_start, w_end = f"{tgl_str} 00:00", f"{tgl_str} 23:55"
+        
+        logger.info(f"   🔄 Melakukan recovery untuk {target} [{tgl_str}]...")
+        
+        try:
+            self.driver.refresh()
+            time.sleep(3)
+            
+            # Tunggu dan navigasi ulang ke menu filter jika perlu
+            WebDriverWait(self.driver, WAIT_TIMEOUT).until(EC.element_to_be_clickable((By.XPATH, "//a[@data-id='2']"))).click()
+            time.sleep(1)
+            nav = "//a[contains(@href, '/mrtgnetcare2/graph/monitoring')]" if self.mode == "sid" else "//a[@data-id='1' and contains(@href, '/mrtgnetcare2/graph')]"
+            WebDriverWait(self.driver, WAIT_TIMEOUT).until(EC.element_to_be_clickable((By.XPATH, nav))).click()
+            time.sleep(2)
+
+            # Re-input SID/Title
+            input_name = self.cfg["input_name"]
+            input_elem = WebDriverWait(self.driver, WAIT_TIMEOUT).until(EC.element_to_be_clickable((By.NAME, input_name)))
+            input_elem.clear(); input_elem.send_keys(target); input_elem.send_keys(Keys.ENTER); time.sleep(2)
+            
+            btn = WebDriverWait(self.driver, WAIT_TIMEOUT).until(EC.element_to_be_clickable((By.CSS_SELECTOR, "a.btn-graph")))
+            self.driver.execute_script("arguments[0].scrollIntoView({block: 'center'});", btn)
+            time.sleep(1); self.driver.execute_script("arguments[0].click();", btn)
+            
+            # Re-input Tanggal
+            if self.mode == "sid":
+                inputs = self.driver.find_elements(By.XPATH, "//button[contains(normalize-space(), 'Filter')]/preceding::input[not(@type='hidden')]")
+                self.driver.execute_script("arguments[0].value = arguments[1];", inputs[-2], w_start)
+                self.driver.execute_script("arguments[0].value = arguments[1];", inputs[-1], w_end)
+                btn_f = self.driver.find_element(By.XPATH, "//button[contains(normalize-space(), 'Filter')]")
+                self.driver.execute_script("arguments[0].click();", btn_f)
+            else:
+                self.driver.execute_script(f"document.getElementById('startdate').value = '{w_start}';")
+                self.driver.execute_script(f"document.getElementById('enddate').value = '{w_end}';")
+                self.driver.execute_script("document.getElementById('graphfilter').click();")
+            
+            time.sleep(3); self.wait_for_loading_and_kill_it(); time.sleep(2)
+            return True
+        except Exception as e:
+            logger.error(f"   ❌ Recovery gagal: {e}")
+            return False
 
     def hide_browser_gaib(self):
         try:
@@ -163,13 +215,19 @@ class MRTGBot:
             _ = self.driver.current_url; return True
         except UnexpectedAlertPresentException:
             self.handle_alerts(); return True
-        except:
-            try: self.driver.get(self.cfg["url"]); time.sleep(5); return True
-            except: return False
+        except Exception as e:
+            logger.warning(f"   ⚠️ Halaman tidak aktif, mencoba reload... ({str(e)[:50]})")
+            try: 
+                self.driver.get(self.cfg["url"])
+                time.sleep(7)
+                return True
+            except: 
+                logger.error("   ❌ Gagal me-reload halaman TelkomCare.")
+                return False
 
     def wait_for_loading_and_kill_it(self):
         try:
-            WebDriverWait(self.driver, 10).until(
+            WebDriverWait(self.driver, WAIT_TIMEOUT).until(
                 EC.invisibility_of_element_located((By.CSS_SELECTOR, ".blockUI, .loading, .spinner, .ajax-loader"))
             )
             js_kill = "document.querySelectorAll('.blockUI, .blockOverlay, .blockMsg, .loading').forEach(el => el.remove());"
@@ -242,32 +300,43 @@ class MRTGBot:
         for attempt in range(1, MAX_RETRIES + 1):
             try:
                 if not self.ensure_page_active(): continue
-                input_elem = WebDriverWait(self.driver, 10).until(EC.element_to_be_clickable((By.NAME, input_name)))
+                input_elem = WebDriverWait(self.driver, WAIT_TIMEOUT).until(EC.element_to_be_clickable((By.NAME, input_name)))
                 input_elem.clear(); input_elem.send_keys(target_value); time.sleep(0.5); input_elem.send_keys(Keys.ENTER); time.sleep(2)
-                btn = WebDriverWait(self.driver, 10).until(EC.element_to_be_clickable((By.CSS_SELECTOR, "a.btn-graph")))
+                btn = WebDriverWait(self.driver, WAIT_TIMEOUT).until(EC.element_to_be_clickable((By.CSS_SELECTOR, "a.btn-graph")))
                 self.driver.execute_script("arguments[0].scrollIntoView({block: 'center'});", btn)
                 time.sleep(1); self.driver.execute_script("arguments[0].click();", btn)
                 return True
-            except (UnexpectedAlertPresentException, Exception) as e:
+            except (UnexpectedAlertPresentException, StaleElementReferenceException, Exception) as e:
                 self.handle_alerts()
-                logger.error(f"FAIL pada {target_value}: {str(e).split('\\n')[0]}")
+                err_msg = str(e).split('\n')[0]
+                logger.error(f"FAIL pada {target_value} (Attempt {attempt}): {err_msg}")
                 if attempt < MAX_RETRIES:
                     logger.info(f"RETRY {attempt}/{MAX_RETRIES} untuk {target_value}...")
                     self.pbar.write(f"  {ANSI_YELLOW}⚠️  Retry {attempt}/{MAX_RETRIES} untuk {target_value}...{ANSI_RESET}")
-                    self.driver.refresh(); time.sleep(10)
+                    # REVISI: Refresh dan tunggu sebentar agar DOM stabil
+                    try: 
+                        self.driver.refresh()
+                        time.sleep(10) # Kasih waktu ekstra setelah error JSON/Server
+                    except: pass
+        
+        logger.error(f"   ❌ Gagal memproses {target_value} setelah {MAX_RETRIES} kali percobaan.")
         return False
 
     def ambil_gambar_logic(self, target, tanggal):
         tgl_str = tanggal.strftime("%d/%m/%Y")
         w_start, w_end = f"{tgl_str} 00:00", f"{tgl_str} 23:55"
-        temp_file = f"temp_{target}_{tanggal.strftime('%Y%m%d')}.png"
+        
+        # Simpan di folder temp khusus
+        os.makedirs(TEMP_FOLDER, exist_ok=True)
+        temp_file = os.path.join(TEMP_FOLDER, f"temp_{target}_{tanggal.strftime('%Y%m%d')}.png")
 
         try:
             logger.info(f"Mulai ambil gambar: {target} [{tgl_str}]")
+            
+            # --- INPUT TANGGAL (Hanya dilakukan di awal, recovery punya input sendiri) ---
             f_sel = By.CSS_SELECTOR if self.mode == "graphtitle" else By.XPATH
             f_val = "button#graphfilter" if self.mode == "graphtitle" else "//button[contains(normalize-space(), 'Filter')]"
-            
-            WebDriverWait(self.driver, 15).until(EC.presence_of_element_located((f_sel, f_val)))
+            WebDriverWait(self.driver, LONG_TIMEOUT).until(EC.presence_of_element_located((f_sel, f_val)))
             
             if self.mode == "sid":
                 inputs = self.driver.find_elements(By.XPATH, "//button[contains(normalize-space(), 'Filter')]/preceding::input[not(@type='hidden')]")
@@ -284,10 +353,20 @@ class MRTGBot:
                 self.driver.execute_script("document.getElementById('enddate').dispatchEvent(new Event('change'));")
                 self.driver.execute_script("document.getElementById('graphfilter').click();")
 
-            time.sleep(3)
-            self.wait_for_loading_and_kill_it()
-            time.sleep(2)
+            time.sleep(3); self.wait_for_loading_and_kill_it(); time.sleep(2)
+            
+            return self._internal_capture_logic(target, tanggal, tgl_str, temp_file)
+        except Exception as e:
+            logger.error(f"ERROR pada {target} [{tgl_str}]: {str(e).split('\\n')[0]}")
+            self.handle_alerts()
+            if 'temp_file' in locals() and os.path.exists(temp_file):
+                try: os.remove(temp_file)
+                except: pass
+            return None
 
+    def _internal_capture_logic(self, target, tanggal, tgl_str, temp_file):
+        """Internal loop untuk handle 'graph not available' dengan recovery"""
+        for graph_attempt in range(1, MAX_GRAPH_RETRIES + 1):
             img_el = None
             for _ in range(15):
                 imgs = self.driver.find_elements(By.XPATH, "//img[contains(@src, 'graph.php')]")
@@ -297,20 +376,31 @@ class MRTGBot:
                 if img_el: break
                 time.sleep(1)
 
-            if not img_el: return None
+            if not img_el:
+                logger.warning(f"   ⚠️ Grafik tidak muncul. Mencoba RECOVERY {graph_attempt}/{MAX_GRAPH_RETRIES}...")
+                self.recover_graph_not_loaded(target, tanggal)
+                continue # Coba capture lagi setelah recovery
             
             self.isolate_image_for_capture(img_el)
-            time.sleep(1.5)
+            time.sleep(3) # Tunggu render matang
             img_el.screenshot(temp_file)
             self.restore_ui_after_capture(img_el)
+
+            # --- CEK APAKAH PLACEHOLDER? ---
+            if is_graph_placeholder(temp_file):
+                logger.warning(f"   ⚠️ Graph terdeteksi ZONK (placeholder), recovery {graph_attempt}/{MAX_GRAPH_RETRIES}...")
+                if os.path.exists(temp_file): os.remove(temp_file)
+                self.recover_graph_not_loaded(target, tanggal)
+                continue # Coba capture lagi setelah recovery
             
+            # --- CEK KUALITAS NORMAL ---
             if check_image_quality(temp_file):
                 logger.info(f"BERHASIL: {target} [{tgl_str}]")
                 return temp_file
-            
-        except Exception as e:
-            logger.error(f"ERROR pada {target} [{tgl_str}]: {str(e).split('\\n')[0]}")
-            self.handle_alerts()
+            else:
+                logger.warning(f"   ⚠️ Kualitas rendah tapi bukan placeholder. Simpan untuk audit.")
+                return None
+        
         return None
 
     def run(self, items, start_date, end_date):
@@ -326,10 +416,15 @@ class MRTGBot:
                     self.total_gagal += total_hari; self.pbar.update(total_hari); continue
                 
                 current = start_date
+                consecutive_fails = 0
                 while current <= end_date:
                     tgl_fmt = current.strftime('%d/%m/%Y')
+                    
+                    # Ambil gambar (Logic internal sudah handle retry/recovery)
                     temp_file = self.ambil_gambar_logic(item, current)
+                    
                     if temp_file:
+                        consecutive_fails = 0 # Reset counter
                         folder_tgl = os.path.join(self.cfg["output"], current.strftime("%Y%m%d"))
                         os.makedirs(folder_tgl, exist_ok=True)
                         fname = f"MRTG_{item}.png" if self.mode == "sid" else f"MRTG_{item}_{current.strftime('%Y%m%d')}.png"
@@ -338,7 +433,18 @@ class MRTGBot:
                         self.pbar.write(f"  {ANSI_GREEN}✅{ANSI_RESET} {item} [{tgl_fmt}]")
                     else:
                         self.total_gagal += 1
+                        consecutive_fails += 1
                         self.pbar.write(f"  {ANSI_RED}❌{ANSI_RESET} {item} [{tgl_fmt}]")
+                        
+                        # SKIP LOGIC: Jika gagal 3x berturut-turut untuk SID ini
+                        if consecutive_fails >= 3:
+                            sisa_hari = (end_date - current).days
+                            if sisa_hari > 0:
+                                logger.warning(f"SKIP SID {item}: Gagal 3x berturut-turut. Melewati sisa {sisa_hari} hari.")
+                                self.pbar.write(f"  {ANSI_YELLOW}⏭️  Skip sisanya ({sisa_hari} hari) karena gagal 3x...{ANSI_RESET}")
+                                self.total_gagal += sisa_hari
+                                self.pbar.update(sisa_hari)
+                                break # Keluar dari loop 'while current'
                     
                     self.pbar.set_description(f"Progres: {ANSI_GREEN}✅ {self.total_sukses}{ANSI_RESET} | {ANSI_RED}❌ {self.total_gagal}{ANSI_RESET}")
                     self.pbar.update(1)
@@ -371,6 +477,10 @@ class MRTGBot:
 def main():
     bot = None
     try:
+        # Pastikan folder temp bersih di awal
+        if os.path.exists(TEMP_FOLDER): shutil.rmtree(TEMP_FOLDER, ignore_errors=True)
+        os.makedirs(TEMP_FOLDER, exist_ok=True)
+        
         console.print(Panel.fit("[bold cyan]AUTOMATED MRTG SCREENSHOT - TELKOMCARE[/bold cyan]", border_style="cyan"))
         table = Table(show_header=False, box=None)
         table.add_row("[1]", "SID Mode"); table.add_row("[2]", "Graph Title Mode")
@@ -389,10 +499,10 @@ def main():
         console.print(Panel.fit("[bold yellow]LOGIN MANUAL LALU ENTER DI SINI...[/bold yellow]", border_style="yellow"))
         input()
         
-        WebDriverWait(bot.driver, 10).until(EC.element_to_be_clickable((By.XPATH, "//a[@data-id='2']"))).click()
+        WebDriverWait(bot.driver, WAIT_TIMEOUT).until(EC.element_to_be_clickable((By.XPATH, "//a[@data-id='2']"))).click()
         time.sleep(1)
         target = "//a[contains(@href, '/mrtgnetcare2/graph/monitoring')]" if mode == "sid" else "//a[@data-id='1' and contains(@href, '/mrtgnetcare2/graph')]"
-        WebDriverWait(bot.driver, 10).until(EC.element_to_be_clickable((By.XPATH, target))).click()
+        WebDriverWait(bot.driver, WAIT_TIMEOUT).until(EC.element_to_be_clickable((By.XPATH, target))).click()
         time.sleep(2)
         
         bot.hide_browser_gaib()

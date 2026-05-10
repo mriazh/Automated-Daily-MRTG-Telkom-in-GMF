@@ -6,6 +6,7 @@ import ctypes
 import logging
 import traceback
 from datetime import datetime, timedelta
+from PIL import Image
 
 # FIX for PyInstaller --windowed mode deadlocks
 if sys.stdout is None:
@@ -35,43 +36,64 @@ from selenium.common.exceptions import (
     StaleElementReferenceException
 )
 
+from config import CONFIG, MAX_RETRIES, MAX_GRAPH_RETRIES, LOG_FILE, LOG_FORMAT, LOG_DATE_FORMAT, WAIT_TIMEOUT, LONG_TIMEOUT, TEMP_FOLDER
+
 # ========== KONFIGURASI LOGGING (SAMA DENGAN CLI) ==========
-LOG_FILE = "mrtg_process.log"
 logging.basicConfig(
     level=logging.INFO,
-    format="[%(asctime)s] [%(levelname)-8s] %(message)s",
-    datefmt="%Y-%m-%d %H:%M:%S",
+    format=LOG_FORMAT,
+    datefmt=LOG_DATE_FORMAT,
     handlers=[logging.FileHandler(LOG_FILE, encoding='utf-8')],
 )
 logger = logging.getLogger(__name__)
 
-# ========== KONFIGURASI PATH ==========
-if getattr(sys, 'frozen', False):
-    base_path = sys._MEIPASS
-    app_dir = os.path.dirname(sys.executable)
-else:
-    base_path = os.path.dirname(os.path.abspath(__file__))
-    app_dir = base_path
+# ========== UTILITY: IMAGE QUALITY CHECK ==========
+def check_image_quality(image_path):
+    try:
+        img = Image.open(image_path)
+        # Cek Resolusi (Gambar error biasanya sangat kecil)
+        if img.height < 100 or img.width < 100:
+            logger.warning(f"   ⚠️  Kualitas Rendah: Resolusi terlalu kecil ({img.width}x{img.height})")
+            return False
+            
+        if img.mode != 'RGB': img = img.convert('RGB')
+        ycbcr = img.convert("YCbCr")
+        extrema = ycbcr.getextrema()
+        
+        # Cek kontras (Gambar kosong/blank biasanya punya range warna sangat sempit)
+        if (extrema[1][1] - extrema[1][0]) < 15 and (extrema[2][1] - extrema[2][0]) < 15:
+            logger.warning(f"   ⚠️  Kualitas Rendah: Gambar terdeteksi kosong/blank (low contrast)")
+            return False
+            
+        return True
+    except Exception as e:
+        logger.error(f"   ❌ Gagal memvalidasi gambar: {e}")
+        return False
 
-MAX_RETRIES = 3
-CONFIG = {
-    "sid": {
-        "file": os.path.join(app_dir, "SID-MRTG.txt"),
-        "output": os.path.join(app_dir, "output_mrtg_sid"),
-        "url": "http://telkomcare.telkom.co.id/mrtgnetcare2/graph/monitoring",
-        "input_name": "sid",
-        "prefix": "SID : ",
-        "label": "SID"
-    },
-    "graphtitle": {
-        "file": os.path.join(app_dir, "GRAPH-TITLE-MRTG.txt"),
-        "output": os.path.join(app_dir, "output_mrtg_graphtitle"),
-        "url": "https://telkomcare.telkom.co.id/mrtgnetcare2/graph",
-        "input_name": "graphtitle",
-        "prefix": "Graph-title : ",
-        "label": "Graph Title"
-    }
-}
+# ==============================================================================
+# 🔍 FUNGSI DETEKSI GRAPH NOT AVAILABLE (PLACEHOLDER)
+# ==============================================================================
+def is_graph_placeholder(image_path):
+    """
+    Cek apakah gambar adalah 'graph not available' (belum load).
+    Graph yang belum load biasanya berupa gambar solid dengan 1-2 warna saja.
+    """
+    try:
+        img = Image.open(image_path)
+        if img.height < 100 or img.width < 100:
+            return True # Resolusi terlalu kecil = placeholder
+        
+        if img.mode != 'RGB': img = img.convert('RGB')
+        ycbcr = img.convert("YCbCr")
+        extrema = ycbcr.getextrema()
+        
+        # Kalau rentang warna sangat sempit (< 10), berarti placeholder image
+        if (extrema[1][1] - extrema[1][0]) < 10 and (extrema[2][1] - extrema[2][0]) < 10:
+            return True
+            
+        return False
+    except:
+        return False
 
 class WorkerSignals(QObject):
     log_msg = Signal(str)
@@ -128,10 +150,24 @@ class ScraperWorker(QThread):
             alert.accept()
             return True
         except NoAlertPresentException: return False
+    
+    def ensure_page_active(self):
+        try:
+            _ = self.driver.current_url; return True
+        except UnexpectedAlertPresentException:
+            self.handle_alerts(); return True
+        except Exception as e:
+            self.log(f"   ⚠️ Halaman tidak aktif, reload... ({str(e)[:50]})", "warning")
+            try: 
+                self.driver.get(self.cfg["url"])
+                time.sleep(7); return True
+            except: 
+                self.log("   ❌ Gagal me-reload halaman.", "error")
+                return False
 
     def wait_for_loading_and_kill_it(self):
         try:
-            WebDriverWait(self.driver, 10).until(
+            WebDriverWait(self.driver, WAIT_TIMEOUT).until(
                 EC.invisibility_of_element_located((By.CSS_SELECTOR, ".blockUI, .loading, .spinner, .ajax-loader"))
             )
             self.driver.execute_script("document.querySelectorAll('.blockUI, .blockOverlay, .blockMsg, .loading').forEach(el => el.remove());")
@@ -198,29 +234,41 @@ class ScraperWorker(QThread):
         for attempt in range(1, MAX_RETRIES + 1):
             if not self.is_running: return False
             try:
-                input_elem = WebDriverWait(self.driver, 10).until(EC.element_to_be_clickable((By.NAME, input_name)))
+                if not self.ensure_page_active(): continue
+                input_elem = WebDriverWait(self.driver, WAIT_TIMEOUT).until(EC.element_to_be_clickable((By.NAME, input_name)))
                 input_elem.clear()
                 input_elem.send_keys(target_value)
                 time.sleep(0.5); input_elem.send_keys(Keys.ENTER); time.sleep(2)
-                btn = WebDriverWait(self.driver, 10).until(EC.element_to_be_clickable((By.CSS_SELECTOR, "a.btn-graph")))
+                btn = WebDriverWait(self.driver, WAIT_TIMEOUT).until(EC.element_to_be_clickable((By.CSS_SELECTOR, "a.btn-graph")))
                 self.driver.execute_script("arguments[0].scrollIntoView({block: 'center'});", btn)
                 time.sleep(1); self.driver.execute_script("arguments[0].click();", btn)
                 return True
-            except Exception as e:
+            except (UnexpectedAlertPresentException, StaleElementReferenceException, Exception) as e:
                 self.handle_alerts()
                 if attempt < MAX_RETRIES:
                     self.log(f"   ⚠️  Retry {attempt}/{MAX_RETRIES} untuk {target_value}...", "warning")
-                    self.driver.refresh(); time.sleep(10)
+                    try: 
+                        self.driver.refresh()
+                        time.sleep(10)
+                    except: pass
+        self.log(f"   ❌ Gagal memproses {target_value} ({MAX_RETRIES}x retry).", "error")
         return False
 
     def ambil_gambar_logic(self, target, tanggal):
         tgl_str = tanggal.strftime("%d/%m/%Y")
         w_start, w_end = f"{tgl_str} 00:00", f"{tgl_str} 23:55"
-        temp_file = f"temp_{target}_{tanggal.strftime('%Y%m%d')}.png"
+        
+        # Simpan di folder temp khusus
+        os.makedirs(TEMP_FOLDER, exist_ok=True)
+        temp_file = os.path.join(TEMP_FOLDER, f"temp_{target}_{tanggal.strftime('%Y%m%d')}.png")
         try:
+            self.log(f"   Mulai ambil gambar: {target} [{tgl_str}]")
+            
+            # --- INPUT TANGGAL ---
             f_sel = By.CSS_SELECTOR if self.mode == "graphtitle" else By.XPATH
             f_val = "button#graphfilter" if self.mode == "graphtitle" else "//button[contains(normalize-space(), 'Filter')]"
-            WebDriverWait(self.driver, 15).until(EC.presence_of_element_located((f_sel, f_val)))
+            WebDriverWait(self.driver, LONG_TIMEOUT).until(EC.presence_of_element_located((f_sel, f_val)))
+            
             if self.mode == "sid":
                 inputs = self.driver.find_elements(By.XPATH, "//button[contains(normalize-space(), 'Filter')]/preceding::input[not(@type='hidden')]")
                 self.driver.execute_script("arguments[0].value = arguments[1];", inputs[-2], w_start)
@@ -235,7 +283,18 @@ class ScraperWorker(QThread):
                 self.driver.execute_script("document.getElementById('startdate').dispatchEvent(new Event('change'));")
                 self.driver.execute_script("document.getElementById('enddate').dispatchEvent(new Event('change'));")
                 self.driver.execute_script("document.getElementById('graphfilter').click();")
+
             time.sleep(3); self.wait_for_loading_and_kill_it(); time.sleep(2)
+            
+            return self._internal_capture_logic(target, tanggal, tgl_str, temp_file)
+        except Exception as e:
+            self.log(f"   ❌ Error Ambil Gambar: {str(e)[:80]}", "error")
+            self.handle_alerts()
+            return None
+
+    def _internal_capture_logic(self, target, tanggal, tgl_str, temp_file):
+        """Internal loop untuk handle 'graph not available' dengan recovery"""
+        for graph_attempt in range(1, MAX_GRAPH_RETRIES + 1):
             img_el = None
             for _ in range(15):
                 imgs = self.driver.find_elements(By.XPATH, "//img[contains(@src, 'graph.php')]")
@@ -244,17 +303,70 @@ class ScraperWorker(QThread):
                         img_el = img; break
                 if img_el: break
                 time.sleep(1)
-            if not img_el: return None
+            
+            if not img_el:
+                self.log(f"   ⚠️ Grafik tidak muncul. Mencoba RECOVERY {graph_attempt}/{MAX_GRAPH_RETRIES}...", "warning")
+                self.recover_graph_not_loaded(target, tanggal)
+                continue # Coba capture lagi
+
             self.isolate_image_for_capture(img_el)
-            time.sleep(1.5); img_el.screenshot(temp_file); self.restore_ui_after_capture(img_el)
-            return temp_file if os.path.exists(temp_file) else None
-        except Exception as e:
-            self.log(f"   ❌ Error Ambil Gambar: {str(e)[:80]}", "error")
-            self.handle_alerts()
+            time.sleep(3) # Tunggu render matang
+            img_el.screenshot(temp_file); self.restore_ui_after_capture(img_el)
+            
+            # --- CEK APAKAH PLACEHOLDER? ---
+            if is_graph_placeholder(temp_file):
+                self.log(f"   ⚠️ Graph ZONK (placeholder), recovery {graph_attempt}/{MAX_GRAPH_RETRIES}...", "warning")
+                if os.path.exists(temp_file): os.remove(temp_file)
+                self.recover_graph_not_loaded(target, tanggal)
+                continue # Coba capture lagi
+            
+            # --- CEK KUALITAS NORMAL ---
+            if check_image_quality(temp_file):
+                return temp_file
+            else:
+                self.log(f"   ⚠️ Kualitas rendah tapi bukan placeholder. Simpan audit.", "warning")
+                return None
         return None
+
+    def recover_graph_not_loaded(self, target, tanggal):
+        """Recovery: Refresh -> Re-input SID -> Re-input Tanggal"""
+        tgl_str = tanggal.strftime("%d/%m/%Y")
+        w_start, w_end = f"{tgl_str} 00:00", f"{tgl_str} 23:55"
+        self.log(f"   🔄 Melakukan recovery untuk {target} [{tgl_str}]...")
+        try:
+            self.driver.refresh(); time.sleep(3)
+            # Re-input SID/Title
+            input_name = self.cfg["input_name"]
+            input_elem = WebDriverWait(self.driver, WAIT_TIMEOUT).until(EC.element_to_be_clickable((By.NAME, input_name)))
+            input_elem.clear(); input_elem.send_keys(target); input_elem.send_keys(Keys.ENTER); time.sleep(2)
+            btn = WebDriverWait(self.driver, WAIT_TIMEOUT).until(EC.element_to_be_clickable((By.CSS_SELECTOR, "a.btn-graph")))
+            self.driver.execute_script("arguments[0].scrollIntoView({block: 'center'});", btn)
+            time.sleep(1); self.driver.execute_script("arguments[0].click();", btn)
+            # Re-input Tanggal
+            if self.mode == "sid":
+                inputs = self.driver.find_elements(By.XPATH, "//button[contains(normalize-space(), 'Filter')]/preceding::input[not(@type='hidden')]")
+                self.driver.execute_script("arguments[0].value = arguments[1];", inputs[-2], w_start)
+                self.driver.execute_script("arguments[0].value = arguments[1];", inputs[-1], w_end)
+                btn_f = self.driver.find_element(By.XPATH, "//button[contains(normalize-space(), 'Filter')]")
+                self.driver.execute_script("arguments[0].click();", btn_f)
+            else:
+                self.driver.execute_script(f"document.getElementById('startdate').value = '{w_start}';")
+                self.driver.execute_script(f"document.getElementById('enddate').value = '{w_end}';")
+                self.driver.execute_script("document.getElementById('graphfilter').click();")
+            time.sleep(3); self.wait_for_loading_and_kill_it(); time.sleep(2)
+            return True
+        except Exception as e:
+            self.log(f"   ❌ Recovery gagal: {e}", "error")
+            return False
 
     def run(self):
         try:
+            # Pastikan folder temp bersih di awal
+            if os.path.exists(TEMP_FOLDER):
+                import shutil
+                shutil.rmtree(TEMP_FOLDER, ignore_errors=True)
+            os.makedirs(TEMP_FOLDER, exist_ok=True)
+
             self.driver = webdriver.Chrome(service=Service(ChromeDriverManager().install()), options=webdriver.ChromeOptions())
             self.driver.get(self.cfg["url"])
             self.log("\n" + "="*50); self.log("⚠️  SILAKAN LOGIN MANUAL DI BROWSER..."); 
@@ -265,10 +377,10 @@ class ScraperWorker(QThread):
                 if self.driver: self.driver.quit()
                 self.signals.finished.emit(); return
             self.hide_browser_gaib()
-            WebDriverWait(self.driver, 10).until(EC.element_to_be_clickable((By.XPATH, "//a[@data-id='2']"))).click()
+            WebDriverWait(self.driver, WAIT_TIMEOUT).until(EC.element_to_be_clickable((By.XPATH, "//a[@data-id='2']"))).click()
             time.sleep(1.5)
             target_nav = "//a[contains(@href, '/mrtgnetcare2/graph/monitoring')]" if self.mode == "sid" else "//a[@data-id='1' and contains(@href, '/mrtgnetcare2/graph')]"
-            WebDriverWait(self.driver, 10).until(EC.element_to_be_clickable((By.XPATH, target_nav))).click()
+            WebDriverWait(self.driver, WAIT_TIMEOUT).until(EC.element_to_be_clickable((By.XPATH, target_nav))).click()
             time.sleep(2)
             items = []
             if os.path.exists(self.cfg["file"]):
@@ -288,7 +400,10 @@ class ScraperWorker(QThread):
                 while current <= self.end_date:
                     if not self.is_running: break
                     tgl_fmt = current.strftime('%d/%m/%Y')
+                    
+                    # Ambil gambar (Logic internal sudah handle retry/recovery)
                     temp = self.ambil_gambar_logic(item, current)
+                    
                     if temp:
                         folder = os.path.join(self.cfg["output"], current.strftime("%Y%m%d"))
                         os.makedirs(folder, exist_ok=True)
