@@ -125,6 +125,7 @@ class MRTGBot:
         self.pbar = None
         self.total_sukses = 0
         self.total_gagal = 0
+        self.total_retry = 0
 
     def setup_browser(self):
         options = webdriver.ChromeOptions()
@@ -144,10 +145,12 @@ class MRTGBot:
         w_start, w_end = f"{tgl_str} 00:00", f"{tgl_str} 23:55"
         
         logger.info(f"   🔄 Melakukan recovery untuk {target} [{tgl_str}]...")
+        self.total_retry += 1
         
         try:
             self.driver.refresh()
             time.sleep(3)
+            self.hide_browser_gaib() # Sembunyiin lagi abis refresh
             
             # Tunggu dan navigasi ulang ke menu filter jika perlu
             WebDriverWait(self.driver, WAIT_TIMEOUT).until(EC.element_to_be_clickable((By.XPATH, "//a[@data-id='2']"))).click()
@@ -220,6 +223,7 @@ class MRTGBot:
             try: 
                 self.driver.get(self.cfg["url"])
                 time.sleep(7)
+                self.hide_browser_gaib() # Sembunyiin lagi abis reload
                 return True
             except: 
                 logger.error("   ❌ Gagal me-reload halaman TelkomCare.")
@@ -312,11 +316,13 @@ class MRTGBot:
                 logger.error(f"FAIL pada {target_value} (Attempt {attempt}): {err_msg}")
                 if attempt < MAX_RETRIES:
                     logger.info(f"RETRY {attempt}/{MAX_RETRIES} untuk {target_value}...")
+                    self.total_retry += 1
                     self.pbar.write(f"  {ANSI_YELLOW}⚠️  Retry {attempt}/{MAX_RETRIES} untuk {target_value}...{ANSI_RESET}")
                     # REVISI: Refresh dan tunggu sebentar agar DOM stabil
                     try: 
                         self.driver.refresh()
                         time.sleep(10) # Kasih waktu ekstra setelah error JSON/Server
+                        self.hide_browser_gaib() # Sembunyiin lagi abis refresh
                     except: pass
         
         logger.error(f"   ❌ Gagal memproses {target_value} setelah {MAX_RETRIES} kali percobaan.")
@@ -410,45 +416,55 @@ class MRTGBot:
 
         try:
             for idx, item in enumerate(items, start=1):
-                log_blank()
-                logger.info(f"=== PROSES ITEM {idx}/{len(items)}: {item} ===")
-                if not self.ganti_target_with_retry(item):
-                    self.total_gagal += total_hari; self.pbar.update(total_hari); continue
+                # Header Item (Pake label dinamis: SID atau Graph Title)
+                label = self.cfg["label"]
+                item_header = f"[{idx}/{len(items)}] {label}: {item}"
+                sep = "━"*10
+                self.pbar.write(f"\n{ANSI_CYAN}{sep} {item_header} {'━'*(60-len(item_header))}{ANSI_RESET}")
+                log_blank(); logger.info(f"=== PROSES {label} {idx}/{len(items)}: {item} ===")
                 
-                current = start_date
-                consecutive_fails = 0
-                while current <= end_date:
-                    tgl_fmt = current.strftime('%d/%m/%Y')
-                    
-                    # Ambil gambar (Logic internal sudah handle retry/recovery)
-                    temp_file = self.ambil_gambar_logic(item, current)
-                    
-                    if temp_file:
-                        consecutive_fails = 0 # Reset counter
-                        folder_tgl = os.path.join(self.cfg["output"], current.strftime("%Y%m%d"))
-                        os.makedirs(folder_tgl, exist_ok=True)
-                        fname = f"MRTG_{item}.png" if self.mode == "sid" else f"MRTG_{item}_{current.strftime('%Y%m%d')}.png"
-                        os.replace(temp_file, os.path.join(folder_tgl, fname))
-                        self.total_sukses += 1
-                        self.pbar.write(f"  {ANSI_GREEN}✅{ANSI_RESET} {item} [{tgl_fmt}]")
-                    else:
-                        self.total_gagal += 1
-                        consecutive_fails += 1
-                        self.pbar.write(f"  {ANSI_RED}❌{ANSI_RESET} {item} [{tgl_fmt}]")
+                # Reset item stats
+                item_sukses, item_gagal, item_retry_start = 0, 0, self.total_retry
+                
+                if not self.ganti_target_with_retry(item):
+                    item_gagal += total_hari
+                    self.total_gagal += total_hari
+                    self.pbar.update(total_hari)
+                else:
+                    current = start_date
+                    consecutive_fails = 0
+                    while current <= end_date:
+                        tgl_fmt = current.strftime('%d/%m/%Y')
+                        temp_file = self.ambil_gambar_logic(item, current)
                         
-                        # SKIP LOGIC: Jika gagal 3x berturut-turut untuk SID ini
-                        if consecutive_fails >= 3:
-                            sisa_hari = (end_date - current).days
-                            if sisa_hari > 0:
-                                logger.warning(f"SKIP SID {item}: Gagal 3x berturut-turut. Melewati sisa {sisa_hari} hari.")
-                                self.pbar.write(f"  {ANSI_YELLOW}⏭️  Skip sisanya ({sisa_hari} hari) karena gagal 3x...{ANSI_RESET}")
-                                self.total_gagal += sisa_hari
-                                self.pbar.update(sisa_hari)
-                                break # Keluar dari loop 'while current'
-                    
-                    self.pbar.set_description(f"Progres: {ANSI_GREEN}✅ {self.total_sukses}{ANSI_RESET} | {ANSI_RED}❌ {self.total_gagal}{ANSI_RESET}")
-                    self.pbar.update(1)
-                    current += timedelta(days=1)
+                        if temp_file:
+                            consecutive_fails = 0
+                            folder_tgl = os.path.join(self.cfg["output"], current.strftime("%Y%m%d"))
+                            os.makedirs(folder_tgl, exist_ok=True)
+                            fname = f"MRTG_{item}.png" if self.mode == "sid" else f"MRTG_{item}_{current.strftime('%Y%m%d')}.png"
+                            os.replace(temp_file, os.path.join(folder_tgl, fname))
+                            self.total_sukses += 1; item_sukses += 1
+                            self.pbar.write(f"  {ANSI_GREEN}✅{ANSI_RESET} {item} [{tgl_fmt}]")
+                        else:
+                            self.total_gagal += 1; item_gagal += 1
+                            consecutive_fails += 1
+                            self.pbar.write(f"  {ANSI_RED}❌{ANSI_RESET} {item} [{tgl_fmt}]")
+                            
+                            if consecutive_fails >= 3:
+                                sisa_hari = (end_date - current).days
+                                if sisa_hari > 0:
+                                    logger.warning(f"SKIP SID {item}: Gagal 3x berturut-turut. Melewati sisa {sisa_hari} hari.")
+                                    self.pbar.write(f"  {ANSI_YELLOW}⏭️  Skip sisanya ({sisa_hari} hari) karena gagal 3x...{ANSI_RESET}")
+                                    self.total_gagal += sisa_hari; item_gagal += sisa_hari
+                                    self.pbar.update(sisa_hari); break
+                        
+                        self.pbar.set_description(f"Progres: {ANSI_GREEN}✅ {self.total_sukses}{ANSI_RESET} | {ANSI_RED}❌ {self.total_gagal}{ANSI_RESET}")
+                        self.pbar.update(1)
+                        current += timedelta(days=1)
+                
+                # Summary Mini per SID
+                item_retry = self.total_retry - item_retry_start
+                self.pbar.write(f"  {ANSI_DIM}└─ Berhasil: {ANSI_GREEN}{item_sukses}{ANSI_RESET}{ANSI_DIM}, Gagal: {ANSI_RED}{item_gagal}{ANSI_RESET}{ANSI_DIM}, Retry: {ANSI_YELLOW}{item_retry}{ANSI_RESET}{ANSI_DIM}{ANSI_RESET}")
                 
                 try: self.driver.find_element(By.TAG_NAME, "body").send_keys(Keys.ESCAPE); time.sleep(1)
                 except: pass
@@ -465,13 +481,14 @@ class MRTGBot:
         total_total = self.total_sukses + self.total_gagal
         if total_total == 0: return
         success_rate = (self.total_sukses / total_total * 100)
-        summary_table = Table(title="📊 RINGKASAN PROSES", border_style="cyan")
+        summary_table = Table(title="📊 RINGKASAN PROSES AKHIR", border_style="cyan", show_header=True)
         summary_table.add_column("Keterangan", style="bold white")
         summary_table.add_column("Jumlah", justify="right")
         summary_table.add_row("Total Gambar Diproses", str(total_total))
         summary_table.add_row("Total [green]SUKSES[/green]", f"[bold green]{self.total_sukses}[/bold green]")
+        summary_table.add_row("Total [yellow]RETRY[/yellow]", f"[bold yellow]{self.total_retry}[/bold yellow]")
         summary_table.add_row("Total [red]GAGAL[/red]", f"[bold red]{self.total_gagal}[/bold red]")
-        summary_table.add_row("Success Rate", f"{success_rate:.1f}%")
+        summary_table.add_row("Overall Success Rate", f"[bold cyan]{success_rate:.1f}%[/bold cyan]")
         console.print("\n"); console.print(summary_table)
 
 def main():

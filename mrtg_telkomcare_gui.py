@@ -111,6 +111,9 @@ class ScraperWorker(QThread):
         self.login_event = threading.Event()
         self.is_running = True
         self.driver = None
+        self.total_sukses = 0
+        self.total_gagal = 0
+        self.total_retry = 0
 
     def log(self, text, level="info"):
         clean_text = text.strip()
@@ -158,9 +161,12 @@ class ScraperWorker(QThread):
             self.handle_alerts(); return True
         except Exception as e:
             self.log(f"   ⚠️ Halaman tidak aktif, reload... ({str(e)[:50]})", "warning")
+            self.total_retry += 1
             try: 
                 self.driver.get(self.cfg["url"])
-                time.sleep(7); return True
+                time.sleep(7)
+                self.hide_browser_gaib() # Sembunyiin lagi
+                return True
             except: 
                 self.log("   ❌ Gagal me-reload halaman.", "error")
                 return False
@@ -246,10 +252,12 @@ class ScraperWorker(QThread):
             except (UnexpectedAlertPresentException, StaleElementReferenceException, Exception) as e:
                 self.handle_alerts()
                 if attempt < MAX_RETRIES:
+                    self.total_retry += 1
                     self.log(f"   ⚠️  Retry {attempt}/{MAX_RETRIES} untuk {target_value}...", "warning")
                     try: 
                         self.driver.refresh()
                         time.sleep(10)
+                        self.hide_browser_gaib() # Sembunyiin lagi
                     except: pass
         self.log(f"   ❌ Gagal memproses {target_value} ({MAX_RETRIES}x retry).", "error")
         return False
@@ -335,6 +343,7 @@ class ScraperWorker(QThread):
         self.log(f"   🔄 Melakukan recovery untuk {target} [{tgl_str}]...")
         try:
             self.driver.refresh(); time.sleep(3)
+            self.hide_browser_gaib() # Sembunyiin lagi
             # Re-input SID/Title
             input_name = self.cfg["input_name"]
             input_elem = WebDriverWait(self.driver, WAIT_TIMEOUT).until(EC.element_to_be_clickable((By.NAME, input_name)))
@@ -357,6 +366,7 @@ class ScraperWorker(QThread):
             return True
         except Exception as e:
             self.log(f"   ❌ Recovery gagal: {e}", "error")
+            self.total_retry += 1
             return False
 
     def run(self):
@@ -392,7 +402,8 @@ class ScraperWorker(QThread):
             total_sukses = 0
             for idx, item in enumerate(items, 1):
                 if not self.is_running: break
-                self.log(f"\n=== PROSES {idx}/{len(items)}: {item} ===")
+                label = self.cfg["label"]
+                self.log(f"\n=== PROSES {label} {idx}/{len(items)}: {item} ===")
                 if not self.ganti_target_with_retry(item):
                     self.log(f"   ❌ Gagal memproses {item}", "error")
                     continue
@@ -410,11 +421,23 @@ class ScraperWorker(QThread):
                         fname = f"MRTG_{item}.png" if self.mode == "sid" else f"MRTG_{item}_{current.strftime('%Y%m%d')}.png"
                         os.replace(temp, os.path.join(folder, fname))
                         self.log(f"   ✅ Berhasil [{tgl_fmt}]")
-                        total_sukses += 1
+                        self.total_sukses += 1
                     else:
                         self.log(f"   ❌ Gagal [{tgl_fmt}]", "error")
+                        self.total_gagal += 1
                     current += timedelta(days=1)
-            self.log("\n" + "="*50); self.log(f"🎉 SELESAI! Total Berhasil: {total_sukses}"); self.log("="*50)
+            
+            # Final Summary Table for GUI Log
+            total_total = self.total_sukses + self.total_gagal
+            success_rate = (self.total_sukses / total_total * 100) if total_total > 0 else 0
+            self.log("\n" + "═"*50)
+            self.log(f"📊  RINGKASAN PROSES AKHIR")
+            self.log(f"   Total Diproses : {total_total}")
+            self.log(f"   Total Berhasil : {self.total_sukses}")
+            self.log(f"   Total Retry    : {self.total_retry}")
+            self.log(f"   Total Gagal    : {self.total_gagal}")
+            self.log(f"   Success Rate   : {success_rate:.1f}%")
+            self.log("═"*50 + "\n")
         except Exception as e:
             self.log(f"\n[CRITICAL ERROR] {e}", "error")
         finally:
