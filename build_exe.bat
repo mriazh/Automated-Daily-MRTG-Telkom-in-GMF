@@ -12,6 +12,7 @@ echo [INFO] Creating standalone executable for GUI version...
 pyinstaller --noconfirm --onefile --windowed ^
  --name "MRTG_TelkomCare_Bot" ^
  --clean ^
+ --add-data ".env;." ^
  "mrtg_telkomcare_gui.py"
 
 echo.

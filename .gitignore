@@ -224,3 +224,6 @@ tesseract-portable/
 # User Data Files
 SID-MRTG.txt
 GRAPH-TITLE-MRTG.txt
+
+# Environment Variables
+.env
