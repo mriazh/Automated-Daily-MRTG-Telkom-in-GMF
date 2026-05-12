@@ -220,3 +220,7 @@ output_mrtg_graphtitle/
 
 # Portable binaries
 tesseract-portable/
+
+# User Data Files
+SID-MRTG.txt
+GRAPH-TITLE-MRTG.txt
