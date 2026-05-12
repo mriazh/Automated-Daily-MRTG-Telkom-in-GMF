@@ -1,8 +1,6 @@
 selenium
-webdriver-manager
 PySide6
 rich
 tqdm
 Pillow
-pytesseract
 pyinstaller
