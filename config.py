@@ -1,5 +1,6 @@
 import os
 import sys
+from dotenv import load_dotenv
 
 # ==============================================================================
 # ⚙️ PUSAT KOMANDO (CENTRAL CONFIG)
@@ -14,6 +15,10 @@ else:
     # Jika dijalankan sebagai Script (.py)
     BASE_PATH = os.path.dirname(os.path.abspath(__file__))
     APP_DIR = BASE_PATH
+
+# Muat file .env dari dalam paket EXE atau folder source code
+env_path = os.path.join(BASE_PATH, '.env')
+load_dotenv(dotenv_path=env_path)
 
 # --- Folder & File ---
 TEMP_FOLDER = os.path.join(APP_DIR, "temp_screenshots")
@@ -31,7 +36,7 @@ CONFIG = {
     "sid": {
         "file": os.path.join(APP_DIR, "SID-MRTG.txt"),
         "output": os.path.join(APP_DIR, "output_mrtg_sid"),
-        "url": "http://telkomcare.telkom.co.id/mrtgnetcare2/graph/monitoring",
+        "url": os.getenv("BASE_URL_SID", ""),
         "input_name": "sid",
         "prefix": "SID : ",
         "label": "SID",
@@ -39,7 +44,7 @@ CONFIG = {
     "graphtitle": {
         "file": os.path.join(APP_DIR, "GRAPH-TITLE-MRTG.txt"),
         "output": os.path.join(APP_DIR, "output_mrtg_graphtitle"),
-        "url": "https://telkomcare.telkom.co.id/mrtgnetcare2/graph",
+        "url": os.getenv("BASE_URL_GRAPH", ""),
         "input_name": "graphtitle",
         "prefix": "Graph-title : ",
         "label": "Graph Title",
