@@ -1,0 +1,3 @@
+Graph-title : Contoh_Site_A
+Graph-title : Contoh_Site_B
+Graph-title : Telkom_Example_Site
