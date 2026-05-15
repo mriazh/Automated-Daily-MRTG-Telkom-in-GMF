@@ -52,7 +52,6 @@ CONFIG = {
 }
 
 # --- Konfigurasi Logging ---
-LOG_FILE = "mrtg_process.log"
 LOG_FORMAT = "[%(asctime)s] [%(levelname)-8s] %(message)s"
 LOG_DATE_FORMAT = "%Y-%m-%d %H:%M:%S"
 

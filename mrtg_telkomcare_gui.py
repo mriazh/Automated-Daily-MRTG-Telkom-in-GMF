@@ -92,7 +92,8 @@ def is_graph_placeholder(image_path):
             return True
             
         return False
-    except:
+    except Exception as e:
+        logger.debug(f"is_graph_placeholder error: {e}")
         return False
 
 class WorkerSignals(QObject):
@@ -144,7 +145,8 @@ class ScraperWorker(QThread):
                             user32.ShowWindow(hwnd, 0)
                 return True
             user32.EnumWindows(enum_cb, 0)
-        except: pass
+        except Exception as e:
+            logger.debug(f"hide_browser_gaib error: {e}")
 
     def handle_alerts(self):
         try:
@@ -167,8 +169,8 @@ class ScraperWorker(QThread):
                 time.sleep(7)
                 self.hide_browser_gaib() # Sembunyiin lagi
                 return True
-            except: 
-                self.log("   ❌ Gagal me-reload halaman.", "error")
+            except Exception as e2: 
+                self.log(f"   ❌ Gagal me-reload halaman: {e2}", "error")
                 return False
 
     def wait_for_loading_and_kill_it(self):
@@ -177,7 +179,8 @@ class ScraperWorker(QThread):
                 EC.invisibility_of_element_located((By.CSS_SELECTOR, ".blockUI, .loading, .spinner, .ajax-loader"))
             )
             self.driver.execute_script("document.querySelectorAll('.blockUI, .blockOverlay, .blockMsg, .loading').forEach(el => el.remove());")
-        except: pass
+        except Exception as e:
+            logger.debug(f"wait_for_loading_and_kill_it: {e}")
 
     def isolate_image_for_capture(self, img_el):
         try:
@@ -209,7 +212,8 @@ class ScraperWorker(QThread):
                 window.scrollTo(0, 0);
             """
             self.driver.execute_script(js_isolate, img_el)
-        except: pass
+        except Exception as e:
+            logger.debug(f"isolate_image_for_capture error: {e}")
 
     def restore_ui_after_capture(self, img_el):
         try:
@@ -233,7 +237,8 @@ class ScraperWorker(QThread):
                 target.style.removeProperty('z-index');
             """
             self.driver.execute_script(js_restore, img_el)
-        except: pass
+        except Exception as e:
+            logger.debug(f"restore_ui_after_capture error: {e}")
 
     def ganti_target_with_retry(self, target_value):
         input_name = self.cfg["input_name"]
@@ -258,7 +263,8 @@ class ScraperWorker(QThread):
                         self.driver.refresh()
                         time.sleep(10)
                         self.hide_browser_gaib() # Sembunyiin lagi
-                    except: pass
+                    except Exception as e:
+                        logger.debug(f"Refresh during retry failed: {e}")
         self.log(f"   ❌ Gagal memproses {target_value} ({MAX_RETRIES}x retry).", "error")
         return False
 
