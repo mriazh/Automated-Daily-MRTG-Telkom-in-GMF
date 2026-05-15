@@ -113,7 +113,8 @@ def is_graph_placeholder(image_path):
             return True
             
         return False
-    except:
+    except Exception as e:
+        logger.debug(f"is_graph_placeholder error: {e}")
         return False
 
 # ========== MRTG BOT CLASS ==========
@@ -203,7 +204,8 @@ class MRTGBot:
                             user32.ShowWindow(hwnd, 0)
                 return True
             user32.EnumWindows(enum_cb, 0)
-        except: pass
+        except Exception as e:
+            logger.debug(f"hide_browser_gaib error: {e}")
 
     def handle_alerts(self):
         try:
@@ -225,8 +227,8 @@ class MRTGBot:
                 time.sleep(7)
                 self.hide_browser_gaib() # Sembunyiin lagi abis reload
                 return True
-            except: 
-                logger.error("   ❌ Gagal me-reload halaman TelkomCare.")
+            except Exception as e: 
+                logger.error(f"   ❌ Gagal me-reload halaman TelkomCare: {e}")
                 return False
 
     def wait_for_loading_and_kill_it(self):
@@ -236,7 +238,8 @@ class MRTGBot:
             )
             js_kill = "document.querySelectorAll('.blockUI, .blockOverlay, .blockMsg, .loading').forEach(el => el.remove());"
             self.driver.execute_script(js_kill)
-        except: pass
+        except Exception as e:
+            logger.debug(f"wait_for_loading_and_kill_it: {e}")
 
     def isolate_image_for_capture(self, img_el):
         try:
@@ -273,7 +276,8 @@ class MRTGBot:
                 window.scrollTo(0, 0);
             """
             self.driver.execute_script(js_isolate, img_el)
-        except: pass
+        except Exception as e:
+            logger.debug(f"isolate_image_for_capture error: {e}")
 
     def restore_ui_after_capture(self, img_el):
         try:
@@ -297,7 +301,8 @@ class MRTGBot:
                 target.style.removeProperty('z-index');
             """
             self.driver.execute_script(js_restore, img_el)
-        except: pass
+        except Exception as e:
+            logger.debug(f"restore_ui_after_capture error: {e}")
 
     def ganti_target_with_retry(self, target_value):
         input_name = self.cfg["input_name"]
@@ -323,7 +328,8 @@ class MRTGBot:
                         self.driver.refresh()
                         time.sleep(10) # Kasih waktu ekstra setelah error JSON/Server
                         self.hide_browser_gaib() # Sembunyiin lagi abis refresh
-                    except: pass
+                    except Exception as e:
+                        logger.debug(f"Refresh during retry failed: {e}")
         
         logger.error(f"   ❌ Gagal memproses {target_value} setelah {MAX_RETRIES} kali percobaan.")
         return False
@@ -367,7 +373,8 @@ class MRTGBot:
             self.handle_alerts()
             if 'temp_file' in locals() and os.path.exists(temp_file):
                 try: os.remove(temp_file)
-                except: pass
+                except Exception as e:
+                    logger.debug(f"Failed to remove temp file: {e}")
             return None
 
     def _internal_capture_logic(self, target, tanggal, tgl_str, temp_file):
@@ -467,7 +474,8 @@ class MRTGBot:
                 self.pbar.write(f"  {ANSI_DIM}└─ Berhasil: {ANSI_GREEN}{item_sukses}{ANSI_RESET}{ANSI_DIM}, Gagal: {ANSI_RED}{item_gagal}{ANSI_RESET}{ANSI_DIM}, Retry: {ANSI_YELLOW}{item_retry}{ANSI_RESET}{ANSI_DIM}{ANSI_RESET}")
                 
                 try: self.driver.find_element(By.TAG_NAME, "body").send_keys(Keys.ESCAPE); time.sleep(1)
-                except: pass
+                except Exception as e:
+                    logger.debug(f"ESC key send failed: {e}")
         except KeyboardInterrupt:
             self._handle_interrupt()
         finally:
@@ -533,7 +541,8 @@ def main():
     finally:
         if bot and bot.driver:
             try: bot.driver.quit()
-            except: pass
+            except Exception as e:
+                logger.debug(f"Driver quit failed: {e}")
 
 def input_tanggal_range():
     console.print("\n📅 Format: DD MM YYYY")
@@ -541,7 +550,9 @@ def input_tanggal_range():
         t_start = console.input("Mulai: ").strip().split()
         t_end = console.input("Akhir: ").strip().split()
         return datetime(int(t_start[2]), int(t_start[1]), int(t_start[0])), datetime(int(t_end[2]), int(t_end[1]), int(t_end[0]))
-    except: return None, None
+    except (ValueError, IndexError) as e:
+        logger.debug(f"Input tanggal tidak valid: {e}")
+        return None, None
 
 if __name__ == "__main__":
     main()
