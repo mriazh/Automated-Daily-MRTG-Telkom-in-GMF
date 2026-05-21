@@ -1,6 +1,7 @@
 import sys
 import os
 import time
+import re
 import threading
 import ctypes
 import logging
@@ -254,7 +255,7 @@ class ScraperWorker(QThread):
                 self.driver.execute_script("arguments[0].scrollIntoView({block: 'center'});", btn)
                 time.sleep(1); self.driver.execute_script("arguments[0].click();", btn)
                 return True
-            except (UnexpectedAlertPresentException, StaleElementReferenceException, Exception) as e:
+            except Exception as e:
                 self.handle_alerts()
                 if attempt < MAX_RETRIES:
                     self.total_retry += 1
@@ -292,8 +293,8 @@ class ScraperWorker(QThread):
                 btn_f = self.driver.find_element(By.XPATH, f_val)
                 self.driver.execute_script("arguments[0].click();", btn_f)
             else:
-                self.driver.execute_script(f"document.getElementById('startdate').value = '{w_start}';")
-                self.driver.execute_script(f"document.getElementById('enddate').value = '{w_end}';")
+                self.driver.execute_script("document.getElementById('startdate').value = arguments[0];", w_start)
+                self.driver.execute_script("document.getElementById('enddate').value = arguments[0];", w_end)
                 self.driver.execute_script("document.getElementById('startdate').dispatchEvent(new Event('change'));")
                 self.driver.execute_script("document.getElementById('enddate').dispatchEvent(new Event('change'));")
                 self.driver.execute_script("document.getElementById('graphfilter').click();")
@@ -365,8 +366,8 @@ class ScraperWorker(QThread):
                 btn_f = self.driver.find_element(By.XPATH, "//button[contains(normalize-space(), 'Filter')]")
                 self.driver.execute_script("arguments[0].click();", btn_f)
             else:
-                self.driver.execute_script(f"document.getElementById('startdate').value = '{w_start}';")
-                self.driver.execute_script(f"document.getElementById('enddate').value = '{w_end}';")
+                self.driver.execute_script("document.getElementById('startdate').value = arguments[0];", w_start)
+                self.driver.execute_script("document.getElementById('enddate').value = arguments[0];", w_end)
                 self.driver.execute_script("document.getElementById('graphfilter').click();")
             time.sleep(3); self.wait_for_loading_and_kill_it(); time.sleep(2)
             return True
@@ -424,7 +425,8 @@ class ScraperWorker(QThread):
                     if temp:
                         folder = os.path.join(self.cfg["output"], current.strftime("%Y%m%d"))
                         os.makedirs(folder, exist_ok=True)
-                        fname = f"MRTG_{item}.png" if self.mode == "sid" else f"MRTG_{item}_{current.strftime('%Y%m%d')}.png"
+                        item_safe = re.sub(r'[\\/*?:"<>|]', '_', item)
+                        fname = f"MRTG_{item_safe}.png" if self.mode == "sid" else f"MRTG_{item_safe}_{current.strftime('%Y%m%d')}.png"
                         os.replace(temp, os.path.join(folder, fname))
                         self.log(f"   ✅ Berhasil [{tgl_fmt}]")
                         self.total_sukses += 1
