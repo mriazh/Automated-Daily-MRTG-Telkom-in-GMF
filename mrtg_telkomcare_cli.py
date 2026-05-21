@@ -1,6 +1,7 @@
 import time
 import os
 import sys
+import re
 import shutil
 import ctypes
 import logging
@@ -177,8 +178,8 @@ class MRTGBot:
                 btn_f = self.driver.find_element(By.XPATH, "//button[contains(normalize-space(), 'Filter')]")
                 self.driver.execute_script("arguments[0].click();", btn_f)
             else:
-                self.driver.execute_script(f"document.getElementById('startdate').value = '{w_start}';")
-                self.driver.execute_script(f"document.getElementById('enddate').value = '{w_end}';")
+                self.driver.execute_script("document.getElementById('startdate').value = arguments[0];", w_start)
+                self.driver.execute_script("document.getElementById('enddate').value = arguments[0];", w_end)
                 self.driver.execute_script("document.getElementById('graphfilter').click();")
             
             time.sleep(3); self.wait_for_loading_and_kill_it(); time.sleep(2)
@@ -315,7 +316,7 @@ class MRTGBot:
                 self.driver.execute_script("arguments[0].scrollIntoView({block: 'center'});", btn)
                 time.sleep(1); self.driver.execute_script("arguments[0].click();", btn)
                 return True
-            except (UnexpectedAlertPresentException, StaleElementReferenceException, Exception) as e:
+            except Exception as e:
                 self.handle_alerts()
                 err_msg = str(e).split('\n')[0]
                 logger.error(f"FAIL pada {target_value} (Attempt {attempt}): {err_msg}")
@@ -359,8 +360,8 @@ class MRTGBot:
                 btn_f = self.driver.find_element(By.XPATH, f_val)
                 self.driver.execute_script("arguments[0].click();", btn_f)
             else:
-                self.driver.execute_script(f"document.getElementById('startdate').value = '{w_start}';")
-                self.driver.execute_script(f"document.getElementById('enddate').value = '{w_end}';")
+                self.driver.execute_script("document.getElementById('startdate').value = arguments[0];", w_start)
+                self.driver.execute_script("document.getElementById('enddate').value = arguments[0];", w_end)
                 self.driver.execute_script("document.getElementById('startdate').dispatchEvent(new Event('change'));")
                 self.driver.execute_script("document.getElementById('enddate').dispatchEvent(new Event('change'));")
                 self.driver.execute_script("document.getElementById('graphfilter').click();")
@@ -448,7 +449,8 @@ class MRTGBot:
                             consecutive_fails = 0
                             folder_tgl = os.path.join(self.cfg["output"], current.strftime("%Y%m%d"))
                             os.makedirs(folder_tgl, exist_ok=True)
-                            fname = f"MRTG_{item}.png" if self.mode == "sid" else f"MRTG_{item}_{current.strftime('%Y%m%d')}.png"
+                            item_safe = re.sub(r'[\\/*?:"<>|]', '_', item)
+                            fname = f"MRTG_{item_safe}.png" if self.mode == "sid" else f"MRTG_{item_safe}_{current.strftime('%Y%m%d')}.png"
                             os.replace(temp_file, os.path.join(folder_tgl, fname))
                             self.total_sukses += 1; item_sukses += 1
                             self.pbar.write(f"  {ANSI_GREEN}✅{ANSI_RESET} {item} [{tgl_fmt}]")
