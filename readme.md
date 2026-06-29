@@ -1,5 +1,14 @@
 # 🚀 MRTG TelkomCare Screenshot Bot
 
+> [!WARNING]
+> **ARCHIVED: This repository is no longer maintained.**
+> New work and releases have been moved to the unified successor project: [MRTG-TelkomCare-Report-Automation](https://github.com/mriazh/MRTG-TelkomCare-Report-Automation)
+>
+> This legacy repository contributed the TelkomCare Selenium scraping and screenshot functionality to the successor project and is kept public purely for historical reference.
+>
+> **⚠️ SAFETY NOTE FOR ARCHIVE USERS:**
+> Do not commit `.env`, `SID-MRTG.txt`, `GRAPH-TITLE-MRTG.txt`, logs, screenshots, or build outputs to any public forks. Use only the provided `*.example.txt` or `.env.example` files for public examples.
+
 > Bot otomatisasi untuk mengambil screenshot grafik MRTG dari portal TelkomCare secara massal. Dirancang untuk keandalan tinggi, batch processing multi-tanggal, dan hasil gambar presisi.
 
 ![Python](https://img.shields.io/badge/Python-3.10%2B-blue?logo=python) ![Selenium](https://img.shields.io/badge/Selenium-4.x-green) ![PySide6](https://img.shields.io/badge/PySide6-GUI-orange) ![PyInstaller](https://img.shields.io/badge/PyInstaller-.exe-red) ![License](https://img.shields.io/badge/License-MIT-yellow)
